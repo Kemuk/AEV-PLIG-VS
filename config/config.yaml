@@ -1,0 +1,464 @@
+# LIT-PCBA Workflow Configuration
+
+# Dataset metadata
+dataset:
+  name: "LIT-PCBA"
+  version: "1.0"
+  description: "Large-scale docking and rescoring benchmark dataset"
+
+# Workflow settings
+workflow:
+  base_dir: "/data/stat-cadd/reub0582/VirtualScreening/LIT_PCBA"
+  batch_size: 100
+  parallel_jobs: 500
+  manifest: "data/master/manifest.parquet"
+
+# Pipeline parameters
+preparation:
+  gypsum_dl:
+    max_variants: 10
+    ph: 7.4
+    thoroughness: 3
+  
+  meeko:
+    rigid_macrocycles: true
+    hydrate: false
+
+docking:
+  method: "vina"
+  exhaustiveness: 8
+  num_modes: 9
+  seed: 0
+  cpu_threads: 4
+  energy_range: 3
+
+rescoring:
+  methods: 
+    - aev-plig
+    - gnina
+    - rf-score
+
+shape:
+  descriptors:
+    - USR
+    - USRCAT
+    - Electroshape
+  conformer_generation:
+    method: "rdkit"
+    n_conformers: 50
+    rms_threshold: 0.5
+
+# Analysis settings
+analysis:
+  bootstrap_iterations: 200
+  top_targets: 8
+  metrics:
+    - ROC-AUC
+    - BEDROC(20)
+    - NEF1%
+    - EF1%
+  confidence_level: 0.95
+
+# Plotting
+plotting:
+  dpi: 300
+  format: "png"
+  style: "seaborn"
+  colors:
+    Vina: "#3498db"
+    AEV-PLIG: "#e74c3c"
+    GNINA: "#2ecc71"
+
+# Target definitions
+targets:
+  ADRB2:
+    pdb_id: "4lde"
+    protein_name: "Beta-2 adrenergic receptor"
+    binding_site:
+      center: {x: -1.772, y: -13.05, z: -50.888}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "ADRB2/4lde_protein.pdbqt"
+      actives_smiles: "ADRB2/actives.smi"
+      inactives_smiles: "ADRB2/inactives.smi"
+      actives_pdbqt_dir: "ADRB2/pdbqt/actives"
+      inactives_pdbqt_dir: "ADRB2/pdbqt/inactives"
+      docked_actives_dir: "ADRB2/docked_vina/actives"
+      docked_inactives_dir: "ADRB2/docked_vina/inactives"
+      docked_actives_sdf: "ADRB2/docked_sdf/actives"
+      docked_inactives_sdf: "ADRB2/docked_sdf/inactives"
+      vina_log_actives: "ADRB2/docked_vina/actives/log"
+      vina_log_inactives: "ADRB2/docked_vina/inactives/log"
+      vina_config_actives: "ADRB2/4lde_config_actives.txt"
+      vina_config_inactives: "ADRB2/4lde_config_inactives.txt"
+      aev_plig_csv: "ADRB2/rescoring/datasets/aev_plig_ADRB2.csv"
+      output_dir: "ADRB2/pdbqt/out"
+
+  ALDH1:
+    pdb_id: "5l2m"
+    protein_name: "Aldehyde dehydrogenase 1"
+    binding_site:
+      center: {x: 33.9895, y: -16.716, z: 13.2615}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "ALDH1/5l2m_protein.pdbqt"
+      actives_smiles: "ALDH1/actives.smi"
+      inactives_smiles: "ALDH1/inactives.smi"
+      actives_pdbqt_dir: "ALDH1/pdbqt/actives"
+      inactives_pdbqt_dir: "ALDH1/pdbqt/inactives"
+      docked_actives_dir: "ALDH1/docked_vina/actives"
+      docked_inactives_dir: "ALDH1/docked_vina/inactives"
+      docked_actives_sdf: "ALDH1/docked_sdf/actives"
+      docked_inactives_sdf: "ALDH1/docked_sdf/inactives"
+      vina_log_actives: "ALDH1/docked_vina/actives/log"
+      vina_log_inactives: "ALDH1/docked_vina/inactives/log"
+      vina_config_actives: "ALDH1/5l2m_config_actives.txt"
+      vina_config_inactives: "ALDH1/5l2m_config_inactives.txt"
+      aev_plig_csv: "ALDH1/rescoring/datasets/aev_plig_ALDH1.csv"
+      output_dir: "ALDH1/pdbqt/out"
+
+  ESR1_ago:
+    pdb_id: "2qzo"
+    protein_name: "Estrogen receptor alpha (agonist)"
+    binding_site:
+      center: {x: 3.91, y: 4.8235, z: -6.1695}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "ESR1_ago/2qzo_protein.pdbqt"
+      actives_smiles: "ESR1_ago/actives.smi"
+      inactives_smiles: "ESR1_ago/inactives.smi"
+      actives_pdbqt_dir: "ESR1_ago/pdbqt/actives"
+      inactives_pdbqt_dir: "ESR1_ago/pdbqt/inactives"
+      docked_actives_dir: "ESR1_ago/docked_vina/actives"
+      docked_inactives_dir: "ESR1_ago/docked_vina/inactives"
+      docked_actives_sdf: "ESR1_ago/docked_sdf/actives"
+      docked_inactives_sdf: "ESR1_ago/docked_sdf/inactives"
+      vina_log_actives: "ESR1_ago/docked_vina/actives/log"
+      vina_log_inactives: "ESR1_ago/docked_vina/inactives/log"
+      vina_config_actives: "ESR1_ago/2qzo_config_actives.txt"
+      vina_config_inactives: "ESR1_ago/2qzo_config_inactives.txt"
+      aev_plig_csv: "ESR1_ago/rescoring/datasets/aev_plig_ESR1_ago.csv"
+      output_dir: "ESR1_ago/pdbqt/out"
+
+  ESR1_ant:
+    pdb_id: "5ufx"
+    protein_name: "Estrogen receptor alpha (antagonist)"
+    binding_site:
+      center: {x: -2.1045, y: -30.917, z: 21.77}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "ESR1_ant/5ufx_protein.pdbqt"
+      actives_smiles: "ESR1_ant/actives.smi"
+      inactives_smiles: "ESR1_ant/inactives.smi"
+      actives_pdbqt_dir: "ESR1_ant/pdbqt/actives"
+      inactives_pdbqt_dir: "ESR1_ant/pdbqt/inactives"
+      docked_actives_dir: "ESR1_ant/docked_vina/actives"
+      docked_inactives_dir: "ESR1_ant/docked_vina/inactives"
+      docked_actives_sdf: "ESR1_ant/docked_sdf/actives"
+      docked_inactives_sdf: "ESR1_ant/docked_sdf/inactives"
+      vina_log_actives: "ESR1_ant/docked_vina/actives/log"
+      vina_log_inactives: "ESR1_ant/docked_vina/inactives/log"
+      vina_config_actives: "ESR1_ant/5ufx_config_actives.txt"
+      vina_config_inactives: "ESR1_ant/5ufx_config_inactives.txt"
+      aev_plig_csv: "ESR1_ant/rescoring/datasets/aev_plig_ESR1_ant.csv"
+      output_dir: "ESR1_ant/pdbqt/out"
+
+  FEN1:
+    pdb_id: "5fv7"
+    protein_name: "Flap endonuclease 1"
+    binding_site:
+      center: {x: -17.4065, y: -5.106, z: 1.4425}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "FEN1/5fv7_protein.pdbqt"
+      actives_smiles: "FEN1/actives.smi"
+      inactives_smiles: "FEN1/inactives.smi"
+      actives_pdbqt_dir: "FEN1/pdbqt/actives"
+      inactives_pdbqt_dir: "FEN1/pdbqt/inactives"
+      docked_actives_dir: "FEN1/docked_vina/actives"
+      docked_inactives_dir: "FEN1/docked_vina/inactives"
+      docked_actives_sdf: "FEN1/docked_sdf/actives"
+      docked_inactives_sdf: "FEN1/docked_sdf/inactives"
+      vina_log_actives: "FEN1/docked_vina/actives/log"
+      vina_log_inactives: "FEN1/docked_vina/inactives/log"
+      vina_config_actives: "FEN1/5fv7_config_actives.txt"
+      vina_config_inactives: "FEN1/5fv7_config_inactives.txt"
+      aev_plig_csv: "FEN1/rescoring/datasets/aev_plig_FEN1.csv"
+      output_dir: "FEN1/pdbqt/out"
+
+  GBA:
+    pdb_id: "2v3d"
+    protein_name: "Beta-glucocerebrosidase"
+    binding_site:
+      center: {x: 32.872, y: 34.738, z: -19.2965}
+      box_size: {x: 35.886, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "GBA/2v3d_protein.pdbqt"
+      actives_smiles: "GBA/actives.smi"
+      inactives_smiles: "GBA/inactives.smi"
+      actives_pdbqt_dir: "GBA/pdbqt/actives"
+      inactives_pdbqt_dir: "GBA/pdbqt/inactives"
+      docked_actives_dir: "GBA/docked_vina/actives"
+      docked_inactives_dir: "GBA/docked_vina/inactives"
+      docked_actives_sdf: "GBA/docked_sdf/actives"
+      docked_inactives_sdf: "GBA/docked_sdf/inactives"
+      vina_log_actives: "GBA/docked_vina/actives/log"
+      vina_log_inactives: "GBA/docked_vina/inactives/log"
+      vina_config_actives: "GBA/2v3d_config_actives.txt"
+      vina_config_inactives: "GBA/2v3d_config_inactives.txt"
+      aev_plig_csv: "GBA/rescoring/datasets/aev_plig_GBA.csv"
+      output_dir: "GBA/pdbqt/out"
+
+  KIT:
+    pdb_id: "1t46"
+    protein_name: "Mast/stem cell growth factor receptor Kit"
+    binding_site:
+      center: {x: 21.179, y: 3.799, z: 18.823}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "KIT/1t46_protein.pdbqt"
+      actives_smiles: "KIT/actives.smi"
+      inactives_smiles: "KIT/inactives.smi"
+      actives_pdbqt_dir: "KIT/pdbqt/actives"
+      inactives_pdbqt_dir: "KIT/pdbqt/inactives"
+      docked_actives_dir: "KIT/docked_vina/actives"
+      docked_inactives_dir: "KIT/docked_vina/inactives"
+      docked_actives_sdf: "KIT/docked_sdf/actives"
+      docked_inactives_sdf: "KIT/docked_sdf/inactives"
+      vina_log_actives: "KIT/docked_vina/actives/log"
+      vina_log_inactives: "KIT/docked_vina/inactives/log"
+      vina_config_actives: "KIT/1t46_config_actives.txt"
+      vina_config_inactives: "KIT/1t46_config_inactives.txt"
+      aev_plig_csv: "KIT/rescoring/datasets/aev_plig_KIT.csv"
+      output_dir: "KIT/pdbqt/out"
+
+  KRAS:
+    pdb_id: "4obe"
+    protein_name: "GTPase KRas"
+    binding_site:
+      center: {x: -17.088, y: 9.109, z: -5.505}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "KRAS/4obe_protein.pdbqt"
+      actives_smiles: "KRAS/actives.smi"
+      inactives_smiles: "KRAS/inactives.smi"
+      actives_pdbqt_dir: "KRAS/pdbqt/actives"
+      inactives_pdbqt_dir: "KRAS/pdbqt/inactives"
+      docked_actives_dir: "KRAS/docked_vina/actives"
+      docked_inactives_dir: "KRAS/docked_vina/inactives"
+      docked_actives_sdf: "KRAS/docked_sdf/actives"
+      docked_inactives_sdf: "KRAS/docked_sdf/inactives"
+      vina_log_actives: "KRAS/docked_vina/actives/log"
+      vina_log_inactives: "KRAS/docked_vina/inactives/log"
+      vina_config_actives: "KRAS/4obe_config_actives.txt"
+      vina_config_inactives: "KRAS/4obe_config_inactives.txt"
+      aev_plig_csv: "KRAS/rescoring/datasets/aev_plig_KRAS.csv"
+      output_dir: "KRAS/pdbqt/out"
+
+  MTORC1:
+    pdb_id: "4dri"
+    protein_name: "Mechanistic target of rapamycin complex 1"
+    binding_site:
+      center: {x: 35.45, y: 48.585, z: 35.327}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "MTORC1/4dri_protein.pdbqt"
+      actives_smiles: "MTORC1/actives.smi"
+      inactives_smiles: "MTORC1/inactives.smi"
+      actives_pdbqt_dir: "MTORC1/pdbqt/actives"
+      inactives_pdbqt_dir: "MTORC1/pdbqt/inactives"
+      docked_actives_dir: "MTORC1/docked_vina/actives"
+      docked_inactives_dir: "MTORC1/docked_vina/inactives"
+      docked_actives_sdf: "MTORC1/docked_sdf/actives"
+      docked_inactives_sdf: "MTORC1/docked_sdf/inactives"
+      vina_log_actives: "MTORC1/docked_vina/actives/log"
+      vina_log_inactives: "MTORC1/docked_vina/inactives/log"
+      vina_config_actives: "MTORC1/4dri_config_actives.txt"
+      vina_config_inactives: "MTORC1/4dri_config_inactives.txt"
+      aev_plig_csv: "MTORC1/rescoring/datasets/aev_plig_MTORC1.csv"
+      output_dir: "MTORC1/pdbqt/out"
+
+  OPRK1:
+    pdb_id: "6b73"
+    protein_name: "Kappa opioid receptor"
+    binding_site:
+      center: {x: 60.27, y: -24.57, z: -4.0955}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "OPRK1/6b73_protein.pdbqt"
+      actives_smiles: "OPRK1/actives.smi"
+      inactives_smiles: "OPRK1/inactives.smi"
+      actives_pdbqt_dir: "OPRK1/pdbqt/actives"
+      inactives_pdbqt_dir: "OPRK1/pdbqt/inactives"
+      docked_actives_dir: "OPRK1/docked_vina/actives"
+      docked_inactives_dir: "OPRK1/docked_vina/inactives"
+      docked_actives_sdf: "OPRK1/docked_sdf/actives"
+      docked_inactives_sdf: "OPRK1/docked_sdf/inactives"
+      vina_log_actives: "OPRK1/docked_vina/actives/log"
+      vina_log_inactives: "OPRK1/docked_vina/inactives/log"
+      vina_config_actives: "OPRK1/6b73_config_actives.txt"
+      vina_config_inactives: "OPRK1/6b73_config_inactives.txt"
+      aev_plig_csv: "OPRK1/rescoring/datasets/aev_plig_OPRK1.csv"
+      output_dir: "OPRK1/pdbqt/out"
+
+  PKM2:
+    pdb_id: "3gr4"
+    protein_name: "Pyruvate kinase M2"
+    binding_site:
+      center: {x: 10.9285, y: 3.1225, z: 13.598}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "PKM2/3gr4_protein.pdbqt"
+      actives_smiles: "PKM2/actives.smi"
+      inactives_smiles: "PKM2/inactives.smi"
+      actives_pdbqt_dir: "PKM2/pdbqt/actives"
+      inactives_pdbqt_dir: "PKM2/pdbqt/inactives"
+      docked_actives_dir: "PKM2/docked_vina/actives"
+      docked_inactives_dir: "PKM2/docked_vina/inactives"
+      docked_actives_sdf: "PKM2/docked_sdf/actives"
+      docked_inactives_sdf: "PKM2/docked_sdf/inactives"
+      vina_log_actives: "PKM2/docked_vina/actives/log"
+      vina_log_inactives: "PKM2/docked_vina/inactives/log"
+      vina_config_actives: "PKM2/3gr4_config_actives.txt"
+      vina_config_inactives: "PKM2/3gr4_config_inactives.txt"
+      aev_plig_csv: "PKM2/rescoring/datasets/aev_plig_PKM2.csv"
+      output_dir: "PKM2/pdbqt/out"
+
+  PPARG:
+    pdb_id: "3b1m"
+    protein_name: "Peroxisome proliferator-activated receptor gamma"
+    binding_site:
+      center: {x: 11.741, y: 48.9585, z: 61.2305}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "PPARG/3b1m_protein.pdbqt"
+      actives_smiles: "PPARG/actives.smi"
+      inactives_smiles: "PPARG/inactives.smi"
+      actives_pdbqt_dir: "PPARG/pdbqt/actives"
+      inactives_pdbqt_dir: "PPARG/pdbqt/inactives"
+      docked_actives_dir: "PPARG/docked_vina/actives"
+      docked_inactives_dir: "PPARG/docked_vina/inactives"
+      docked_actives_sdf: "PPARG/docked_sdf/actives"
+      docked_inactives_sdf: "PPARG/docked_sdf/inactives"
+      vina_log_actives: "PPARG/docked_vina/actives/log"
+      vina_log_inactives: "PPARG/docked_vina/inactives/log"
+      vina_config_actives: "PPARG/3b1m_config_actives.txt"
+      vina_config_inactives: "PPARG/3b1m_config_inactives.txt"
+      aev_plig_csv: "PPARG/rescoring/datasets/aev_plig_PPARG.csv"
+      output_dir: "PPARG/pdbqt/out"
+
+  TP53:
+    pdb_id: "3zme"
+    protein_name: "Tumor protein p53"
+    binding_site:
+      center: {x: 91.9175, y: 94.1415, z: -45.6755}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "TP53/3zme_protein.pdbqt"
+      actives_smiles: "TP53/actives.smi"
+      inactives_smiles: "TP53/inactives.smi"
+      actives_pdbqt_dir: "TP53/pdbqt/actives"
+      inactives_pdbqt_dir: "TP53/pdbqt/inactives"
+      docked_actives_dir: "TP53/docked_vina/actives"
+      docked_inactives_dir: "TP53/docked_vina/inactives"
+      docked_actives_sdf: "TP53/docked_sdf/actives"
+      docked_inactives_sdf: "TP53/docked_sdf/inactives"
+      vina_log_actives: "TP53/docked_vina/actives/log"
+      vina_log_inactives: "TP53/docked_vina/inactives/log"
+      vina_config_actives: "TP53/3zme_config_actives.txt"
+      vina_config_inactives: "TP53/3zme_config_inactives.txt"
+      aev_plig_csv: "TP53/rescoring/datasets/aev_plig_TP53.csv"
+      output_dir: "TP53/pdbqt/out"
+
+  VDR:
+    pdb_id: "3a2j"
+    protein_name: "Vitamin D receptor"
+    binding_site:
+      center: {x: 10.7405, y: -4.121, z: -32.2075}
+      box_size: {x: 36.0, y: 36.0, z: 36.0}
+    docking_params:
+      exhaustiveness: 8
+      num_modes: 9
+      seed: 0
+      gpu_threads: 8000
+    files:
+      protein_pdbqt: "VDR/3a2j_protein.pdbqt"
+      actives_smiles: "VDR/actives.smi"
+      inactives_smiles: "VDR/inactives.smi"
+      actives_pdbqt_dir: "VDR/pdbqt/actives"
+      inactives_pdbqt_dir: "VDR/pdbqt/inactives"
+      docked_actives_dir: "VDR/docked_vina/actives"
+      docked_inactives_dir: "VDR/docked_vina/inactives"
+      docked_actives_sdf: "VDR/docked_sdf/actives"
+      docked_inactives_sdf: "VDR/docked_sdf/inactives"
+      vina_log_actives: "VDR/docked_vina/actives/log"
+      vina_log_inactives: "VDR/docked_vina/inactives/log"
+      vina_config_actives: "VDR/3a2j_config_actives.txt"
+      vina_config_inactives: "VDR/3a2j_config_inactives.txt"
+      aev_plig_csv: "VDR/rescoring/datasets/aev_plig_VDR.csv"
+      output_dir: "VDR/pdbqt/out"

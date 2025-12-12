@@ -1,0 +1,31 @@
+# Configuration for Molecular Docking Pipeline
+# Snakemake workflow configuration
+
+# Working directory
+work_dir: "."
+
+# Number of parallel shards for array-style jobs
+n_shards: 100
+
+# Chemical parameters
+ph: 7.4
+
+# Resource allocation
+cpus_per_conversion: 16
+cpus_per_task: 8
+cpus_per_dock_task: 32
+cpu_per_dock: 8
+
+# Model configuration
+model_name: "model_GATv2Net_ligsim90_fep_benchmark"
+
+# Vina configuration
+vina_gpu_bin: "vina-gpu-dev/QuickVina2-GPU-2-1"
+
+# Conda environments
+# Note: These should point to your conda environment YAML files
+conda_prefix: "/data/stat-cadd/reub0582"
+
+# Email notifications (optional - requires SMTP configuration)
+email: "your.email@ox.ac.uk"
+notify_on_completion: false
