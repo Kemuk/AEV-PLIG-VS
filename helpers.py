@@ -1,9 +1,17 @@
+"""
+Helper functions for training and evaluation.
+
+This module provides utility functions for model training and evaluation.
+Most functionality has been moved to the aev_plig package.
+"""
+
 import torch
 import numpy as np
 from math import sqrt
 from scipy import stats
-from model_defs import GATv2Net
+from aev_plig.models import GATv2Net
 
+# Model dictionary for backward compatibility
 model_dict = {"GATv2Net": GATv2Net}
 
 def get_num_parameters(model):

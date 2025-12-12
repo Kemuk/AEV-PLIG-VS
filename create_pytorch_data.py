@@ -1,6 +1,13 @@
+"""
+Create PyTorch Geometric datasets from graph pickle files.
+
+This script combines graphs from multiple datasets (PDBbind, BindingNet, BindingDB)
+and creates train/valid/test splits for model training.
+"""
+
 import pandas as pd
 import pickle
-from utils import GraphDataset
+from aev_plig.datasets import GraphDataset
 
 """
 Load graphs
