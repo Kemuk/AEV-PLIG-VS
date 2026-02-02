@@ -2,7 +2,7 @@
 
 ## Status
 Last updated: 2026-02-02
-Current phase: CI setup
+Current phase: Core features complete, expanding test coverage
 
 ## Completed
 - [x] Refactor codebase into modular package (v2.0)
@@ -10,11 +10,16 @@ Current phase: CI setup
 - [x] Remove code duplication (~500 lines eliminated)
 - [x] Create model registry for extensibility
 - [x] Integration test suite (7 test files)
+- [x] GitHub Actions CI workflow
+- [x] Bayesian last layer (GATv2NetBayesian) + minimal tests
 
 ## Up Next
-1. **GitHub Actions CI workflow** — URGENT
-2. **Bayesian last layer + minimal tests** — NEXT
-3. Dependency consolidation (setup.py extras) — LATER
+1. Unit tests (Phase 2) — MEDIUM
+2. Regression tests (Phase 3) — LOW
+
+## Backburner
+- Dependency consolidation (setup.py extras)
+- Migrate setup.py → pyproject.toml (see notes below)
 
 ---
 
@@ -294,6 +299,53 @@ jobs:
 .github/
 └── workflows/
     └── ci.yml    # Single workflow with matrix
+```
+
+---
+
+## Backburner: Migrate to pyproject.toml
+
+Priority: LOW
+Status: Deferred
+
+### Why Migrate
+- `setup.py` is legacy (PEP 517/518 deprecated it)
+- `pyproject.toml` is declarative and cleaner
+- Better build isolation
+
+### Proposed Structure
+```toml
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aev-plig"
+version = "2.0.0"
+requires-python = ">=3.9"
+
+dependencies = [
+    "torch>=2.0.0",
+    "torch-geometric>=2.3.0",
+    # NOTE: torch-scatter/sparse removed - require manual install
+    "rdkit>=2023.0.0",
+    "torchani>=2.2.0",
+    # ... other deps
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+```
+
+### torch-scatter Problem
+torch-scatter requires PyTorch at build time (imports torch in setup.py).
+pip doesn't guarantee install order, so `pip install -e .` fails on fresh env.
+
+**Workaround:** Don't include torch-scatter in dependencies. Document manual install:
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+pip install -e .
 ```
 
 ---
