@@ -12,6 +12,8 @@ Current phase: Integration testing
 
 ## In Progress
 - [ ] Integration test suite (8 tests)
+- [ ] Dependency consolidation (setup.py extras)
+- [ ] GitHub Actions CI workflow
 
 ---
 
@@ -180,6 +182,137 @@ pytest tests/integration/
 
 # Skip slow tests
 pytest -m "not slow"
+```
+
+---
+
+## Planned: Dependency Consolidation
+
+Priority: HIGH
+Status: Planning
+
+### Current State (Problem)
+Two conda environment files with duplicated, pinned dependencies:
+- `aev-plig-linux.yml` — Linux + CUDA
+- `aev-plig-mac.yml` — macOS CPU
+
+These were generated via `conda env export` and contain:
+- OS-specific system libraries (non-portable)
+- Exact version pins (maintenance burden)
+- Duplicated package lists
+
+### Proposed Solution
+Use `setup.py` with `extras_require` for optional dependencies:
+
+```python
+# setup.py
+extras_require={
+    'cuda': [
+        'torch-scatter',
+        'torch-sparse',
+    ],
+    'dev': [
+        'pytest>=7.0',
+        'pytest-cov>=4.0',
+    ],
+},
+```
+
+### User Install Commands
+```bash
+# CPU only (default)
+pip install .
+
+# With CUDA support
+pip install .[cuda]
+
+# For development (includes tests)
+pip install -e .[dev]
+
+# Everything
+pip install -e .[cuda,dev]
+```
+
+### CUDA PyTorch Note
+For CUDA-enabled PyTorch, users install PyTorch first:
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install .[cuda]
+```
+
+Document this in README.md.
+
+### Files to Delete
+- `aev-plig-linux.yml`
+- `aev-plig-mac.yml`
+
+### Optional: Minimal environment.yml
+For conda users who prefer it:
+```yaml
+name: aev-plig
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - -e .[dev]
+```
+
+---
+
+## Planned: GitHub Actions CI
+
+Priority: HIGH
+Depends on: Dependency consolidation
+
+### Workflow: `.github/workflows/ci.yml`
+
+**Trigger:** Push to `main` only
+
+**Strategy:** Matrix for Linux + macOS
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10"]
+
+    steps:
+      - Checkout code
+      - Setup Python
+      - Cache pip dependencies
+      - Install PyTorch CPU
+      - Install package: pip install -e .[dev]
+      - Run tests: pytest --cov=aev_plig
+```
+
+### Key Decisions
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Conda vs pip | pip | Faster in CI (~2-3 min saved) |
+| CUDA in CI | No (CPU only) | Simpler, GitHub runners don't have GPU |
+| Python version | 3.10 | Latest in setup.py classifiers |
+| Coverage upload | Optional | Add Codecov later if needed |
+
+### Estimated Run Time
+~3-5 minutes per OS
+
+### File Structure
+```
+.github/
+└── workflows/
+    └── ci.yml    # Single workflow with matrix
 ```
 
 ---
