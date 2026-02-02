@@ -2,18 +2,19 @@
 
 ## Status
 Last updated: 2026-02-02
-Current phase: Integration testing
+Current phase: CI setup
 
 ## Completed
 - [x] Refactor codebase into modular package (v2.0)
 - [x] Centralize configuration in `aev_plig/config.py`
 - [x] Remove code duplication (~500 lines eliminated)
 - [x] Create model registry for extensibility
+- [x] Integration test suite (7 test files)
 
-## In Progress
-- [ ] Integration test suite (8 tests)
-- [ ] Dependency consolidation (setup.py extras)
-- [ ] GitHub Actions CI workflow
+## Up Next
+1. **GitHub Actions CI workflow** — URGENT
+2. **Bayesian last layer + minimal tests** — NEXT
+3. Dependency consolidation (setup.py extras) — LATER
 
 ---
 
@@ -55,8 +56,8 @@ Target: 70% coverage per module
 
 ## Planned: Bayesian Last Layer
 
-Priority: MEDIUM
-Depends on: Integration tests complete
+Priority: HIGH
+Depends on: GitHub Actions CI
 
 ### Motivation
 Add uncertainty quantification to predictions. Useful for:
@@ -116,13 +117,15 @@ class GATv2NetBayesian(nn.Module):
         return mean, var
 ```
 
-### Tests Required for Bayesian
+### Minimal Tests for Bayesian
 | Test | Purpose |
 |------|---------|
 | test_bayesian_output_shape | Returns (mean, var) tuple |
 | test_variance_positivity | var > 0 always |
-| test_uncertainty_calibration | ~68% within ±1σ on held-out data |
-| test_ood_uncertainty | Higher variance for dissimilar molecules |
+
+Additional tests (later):
+- test_uncertainty_calibration — ~68% within ±1σ on held-out data
+- test_ood_uncertainty — Higher variance for dissimilar molecules
 
 ---
 
@@ -188,20 +191,17 @@ pytest -m "not slow"
 
 ## Planned: Dependency Consolidation
 
-Priority: HIGH
-Status: Planning
+Priority: MEDIUM
+Status: Deferred
 
-### Current State (Problem)
-Two conda environment files with duplicated, pinned dependencies:
+### Current State
+Two conda environment files exist:
 - `aev-plig-linux.yml` — Linux + CUDA
 - `aev-plig-mac.yml` — macOS CPU
 
-These were generated via `conda env export` and contain:
-- OS-specific system libraries (non-portable)
-- Exact version pins (maintenance burden)
-- Duplicated package lists
+Keep these for now as reference.
 
-### Proposed Solution
+### Future Proposal
 Use `setup.py` with `extras_require` for optional dependencies:
 
 ```python
@@ -218,7 +218,7 @@ extras_require={
 },
 ```
 
-### User Install Commands
+### User Install Commands (future)
 ```bash
 # CPU only (default)
 pip install .
@@ -240,31 +240,12 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install .[cuda]
 ```
 
-Document this in README.md.
-
-### Files to Delete
-- `aev-plig-linux.yml`
-- `aev-plig-mac.yml`
-
-### Optional: Minimal environment.yml
-For conda users who prefer it:
-```yaml
-name: aev-plig
-channels:
-  - conda-forge
-dependencies:
-  - python=3.10
-  - pip
-  - pip:
-      - -e .[dev]
-```
-
 ---
 
 ## Planned: GitHub Actions CI
 
-Priority: HIGH
-Depends on: Dependency consolidation
+Priority: URGENT
+Depends on: Nothing (do first)
 
 ### Workflow: `.github/workflows/ci.yml`
 
