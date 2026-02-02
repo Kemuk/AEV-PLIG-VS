@@ -110,6 +110,21 @@ def concordance_index(y, f):
     return ci
 
 
+def gaussian_nll_loss(mean, var, target):
+    """
+    Compute Gaussian negative log-likelihood loss for Bayesian models.
+
+    Args:
+        mean: Predicted mean values
+        var: Predicted variance values (must be positive)
+        target: True target values
+
+    Returns:
+        torch.Tensor: Mean NLL loss
+    """
+    return 0.5 * (torch.log(var) + (target - mean) ** 2 / var).mean()
+
+
 # ==================== Trainer Class ====================
 
 class Trainer:
@@ -167,6 +182,9 @@ class Trainer:
         """
         Train for one epoch.
 
+        Automatically detects Bayesian models (those returning (mean, var) tuple)
+        and uses Gaussian NLL loss instead of MSE loss.
+
         Args:
             epoch: Current epoch number
             log_interval: How often to print progress (default: 100)
@@ -181,7 +199,15 @@ class Trainer:
             data = data.to(self.device)
             self.optimizer.zero_grad()
             output = self.model(data)
-            loss = self.loss_fn(output, data.y.view(-1, 1).to(self.device))
+            target = data.y.view(-1, 1).to(self.device)
+
+            # Auto-detect Bayesian model (returns tuple)
+            if isinstance(output, tuple):
+                mean, var = output
+                loss = gaussian_nll_loss(mean, var, target)
+            else:
+                loss = self.loss_fn(output, target)
+
             loss.backward()
             self.optimizer.step()
             total_loss += (loss.item() * len(data.y))
@@ -202,6 +228,8 @@ class Trainer:
         """
         Validate the model on validation set.
 
+        Automatically detects Bayesian models and extracts mean predictions.
+
         Returns:
             tuple: (true_values, predictions) both denormalized
         """
@@ -215,7 +243,14 @@ class Trainer:
             for data in self.valid_loader:
                 data = data.to(self.device)
                 output = self.model(data)
-                total_preds = torch.cat((total_preds, output.cpu()), 0)
+
+                # Auto-detect Bayesian model (returns tuple)
+                if isinstance(output, tuple):
+                    mean, var = output
+                    total_preds = torch.cat((total_preds, mean.cpu()), 0)
+                else:
+                    total_preds = torch.cat((total_preds, output.cpu()), 0)
+
                 total_labels = torch.cat((total_labels, data.y.view(-1, 1).cpu()), 0)
 
         # Denormalize predictions and labels
@@ -285,15 +320,21 @@ class Trainer:
         """
         Make predictions on test set.
 
+        Automatically detects Bayesian models. For Bayesian models, returns
+        variance as a third element in the tuple.
+
         Args:
             test_loader: DataLoader for test data
 
         Returns:
             tuple: (true_values, predictions) both denormalized
+                   For Bayesian models: (true_values, predictions, variances)
         """
         self.model.eval()
         total_preds = torch.Tensor()
+        total_vars = torch.Tensor()
         total_labels = torch.Tensor()
+        is_bayesian = False
 
         print('Make prediction for {} samples...'.format(len(test_loader.dataset)))
 
@@ -301,7 +342,16 @@ class Trainer:
             for data in test_loader:
                 data = data.to(self.device)
                 output = self.model(data)
-                total_preds = torch.cat((total_preds, output.cpu()), 0)
+
+                # Auto-detect Bayesian model (returns tuple)
+                if isinstance(output, tuple):
+                    is_bayesian = True
+                    mean, var = output
+                    total_preds = torch.cat((total_preds, mean.cpu()), 0)
+                    total_vars = torch.cat((total_vars, var.cpu()), 0)
+                else:
+                    total_preds = torch.cat((total_preds, output.cpu()), 0)
+
                 total_labels = torch.cat((total_labels, data.y.view(-1, 1).cpu()), 0)
 
         # Denormalize predictions and labels
@@ -311,5 +361,10 @@ class Trainer:
         y_pred = self.y_scaler.inverse_transform(
             total_preds.detach().numpy().flatten().reshape(-1, 1)
         ).flatten()
+
+        if is_bayesian:
+            # Return variance as well (not denormalized - it's in normalized space)
+            y_var = total_vars.detach().numpy().flatten()
+            return y_true, y_pred, y_var
 
         return y_true, y_pred

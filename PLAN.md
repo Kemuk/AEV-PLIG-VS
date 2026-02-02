@@ -12,6 +12,7 @@ Current phase: Core features complete, expanding test coverage
 - [x] Integration test suite (7 test files)
 - [x] GitHub Actions CI workflow
 - [x] Bayesian last layer (GATv2NetBayesian) + minimal tests
+- [x] Bayesian training support (auto-detect in Trainer)
 
 ## Up Next
 1. Unit tests (Phase 2) — MEDIUM
