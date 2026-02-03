@@ -24,8 +24,8 @@ set -euo pipefail
 
 # Dataset definitions: URL|FILENAME|EXTRACT_DIR
 DATASETS="
-http://pdbbind.org.cn/download/PDBbind_v2020_refined.tar.gz|pdbbind_refined.tar.gz|pdbbind/refined-set
-http://pdbbind.org.cn/download/PDBbind_v2020_other_PL.tar.gz|pdbbind_general.tar.gz|pdbbind/general-set
+https://huggingface.co/datasets/Kingldore/aev-plig/blob/main/PDBbind_v2020_refined.tar.gz
+https://huggingface.co/datasets/Kingldore/aev-plig/blob/main/PDBbind_v2020_other_PL.tar.gz
 http://bindingnet.huanglab.org.cn/api/api/download/binding_database|bindingnet.tar.gz|bindingnet/from_chembl_client
 https://www.bindingdb.org/bind/chemsearch/marvin/SDFdownload.jsp?download_file=/rwd/data/surflex/surflex.tar|bindingdb.tar|bindingdb/surflex
 "
