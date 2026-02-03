@@ -15,12 +15,78 @@ Current phase: Core features complete, expanding test coverage
 - [x] Bayesian training support (auto-detect in Trainer)
 
 ## Up Next
-1. Unit tests (Phase 2) — MEDIUM
-2. Regression tests (Phase 3) — LOW
+1. Download data script — HIGH
+2. Unit tests (Phase 2) — MEDIUM
+3. Regression tests (Phase 3) — LOW
 
 ## Backburner
 - Dependency consolidation (setup.py extras)
 - Migrate setup.py → pyproject.toml (see notes below)
+
+---
+
+## Planned: Download Data Script
+
+Priority: HIGH
+File: `scripts/download_data.sh`
+
+### Purpose
+Bash script to download training datasets with optional parallel downloads for Linux.
+
+### Data Sources
+
+| Dataset | URL | Archive | Extract To |
+|---------|-----|---------|------------|
+| PDBbind (refined) | `http://pdbbind.org.cn/download/PDBbind_v2020_refined.tar.gz` | tar.gz | `data/pdbbind/refined-set/` |
+| PDBbind (general) | `http://pdbbind.org.cn/download/PDBbind_v2020_other_PL.tar.gz` | tar.gz | `data/pdbbind/general-set/` |
+| BindingNet | `http://bindingnet.huanglab.org.cn/api/api/download/binding_database` | tar.gz | `data/bindingnet/from_chembl_client/` |
+| BindingDB-DCS | `https://www.bindingdb.org/bind/chemsearch/marvin/SDFdownload.jsp?download_file=/rwd/data/surflex/surflex.tar` | tar | `data/bindingdb/surflex/` |
+
+### Usage
+```bash
+# Download all datasets (sequential)
+./scripts/download_data.sh
+
+# Download with 4 parallel downloads (Linux)
+./scripts/download_data.sh --threads 4
+
+# Download only PDBbind
+./scripts/download_data.sh --dataset pdbbind
+
+# Download and extract
+./scripts/download_data.sh --extract
+
+# Full example
+./scripts/download_data.sh --dataset all --threads 4 --extract
+```
+
+### Options
+```
+--dataset DATASET   Which dataset: pdbbind, bindingnet, bindingdb, all (default: all)
+--threads N         Parallel downloads (default: 1)
+--extract           Extract archives after download
+--skip-existing     Skip if file already exists
+--output-dir DIR    Base directory (default: data/)
+-h, --help          Show help
+```
+
+### Directory Structure Created
+```
+data/
+├── pdbbind/
+│   ├── refined-set/      # PDBbind refined
+│   └── general-set/      # PDBbind general
+├── bindingnet/
+│   └── from_chembl_client/
+└── bindingdb/
+    └── surflex/
+```
+
+### Implementation Notes
+- Use `wget -c` for resume support
+- Use `wget --progress=bar:force` for progress
+- Parallel: background jobs with `&` and `wait`
+- Auto-detect archive type (tar.gz vs tar)
 
 ---
 
