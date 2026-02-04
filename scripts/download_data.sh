@@ -8,8 +8,8 @@ set -euo pipefail
 DATASETS="
 https://huggingface.co/datasets/Kingldore/aev-plig/resolve/main/PDBbind_v2020_refined.tar.gz|pdbbind_refined.tar.gz|pdbbind/refined-set
 https://huggingface.co/datasets/Kingldore/aev-plig/resolve/main/PDBbind_v2020_other_PL.tar.gz|pdbbind_general.tar.gz|pdbbind/general-set
-http://bindingnet.huanglab.org.cn/api/api/download/binding_database|bindingnet.tar.gz|bindingnet/from_chembl_client
-https://www.bindingdb.org/bind/chemsearch/marvin/SDFdownload.jsp?download_file=/rwd/data/surflex/surflex.tar|surflex.tar.gz|bindingdb/surflex
+https://huggingface.co/datasets/Kingldore/aev-plig/blob/main/bindingnet.tar.gz|bindingnet.tar.gz/from_chembl_client
+https://huggingface.co/datasets/Kingldore/aev-plig/resolve/main/bindingdb.tar.gz|bindingdb.tar.gz|bindingdb/surflex
 "
 
 # =========================
