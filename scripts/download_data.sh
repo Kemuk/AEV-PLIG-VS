@@ -32,16 +32,33 @@ dataset_extracted() {
   [[ -f "$1/.extracted" ]]
 }
 
-download_dataset() {
-  local url="$1" archive="$2"
+get_download_format() {
+  while IFS='|' read -r url filename extract_dir; do
+    [[ -z "$url" ]] && continue
+    echo "$url"
+    echo "  dir=$OUTPUT_DIR"
+    echo "  out=$filename"
+  done <<< "$FILTERED"
+}
 
-  if archive_exists "$archive"; then
-    echo "Archive exists: $(basename "$archive")"
+download_all() {
+  if [[ "$SPIDER" == true ]]; then
+    while IFS='|' read -r url filename extract_dir; do
+      [[ -z "$url" ]] && continue
+      echo "Checking: $url"
+      wget --spider "$url" 2>&1 | grep -E "HTTP|Length" || true
+    done <<< "$FILTERED"
     return
   fi
 
-  echo "Downloading: $(basename "$archive")"
-  wget -c --show-progress "$url" -O "$archive"
+  echo "Downloading datasets..."
+  get_download_format | aria2c \
+    -j "$THREADS" \
+    -c \
+    -x 16 \
+    --auto-file-renaming=false \
+    --allow-overwrite=true \
+    --input-file=-
 }
 
 extract_dataset() {
@@ -53,42 +70,29 @@ extract_dataset() {
     return
   fi
 
+  if ! archive_exists "$archive"; then
+    echo "Archive not found: $archive" >&2
+    return 1
+  fi
+
   mkdir -p "$outdir"
   echo "Extracting: $(basename "$archive") → $outdir"
 
   case "$archive" in
-    *.tar.gz) tar -xzf "$archive" -C "$outdir" ;;
-    *.tar)    tar -xf  "$archive" -C "$outdir" ;;
-    *) echo "Unsupported archive: $archive" >&2; exit 1 ;;
+    *.tar.gz) pigz -dc "$archive" | tar -xf - -C "$outdir" ;;
+    *.tar)    tar -xf "$archive" -C "$outdir" ;;
+    *) echo "Unsupported archive: $archive" >&2; return 1 ;;
   esac
 
   touch "$marker"
 }
 
-process_dataset() {
-  IFS='|' read -r url filename extract_dir <<< "$1"
-
-  local archive="$OUTPUT_DIR/$filename"
-  local target="$OUTPUT_DIR/$extract_dir"
-
-  if [[ "$SPIDER" == true ]]; then
-    echo "Checking: $url"
-    wget --spider "$url"
-    return
-  fi
-
-  case "$MODE" in
-    download)
-      download_dataset "$url" "$archive"
-      ;;
-    extract)
-      extract_dataset "$archive" "$target"
-      ;;
-    all)
-      download_dataset "$url" "$archive"
-      extract_dataset "$archive" "$target"
-      ;;
-  esac
+extract_all() {
+  echo "Extracting datasets..."
+  while IFS='|' read -r url filename extract_dir; do
+    [[ -z "$url" ]] && continue
+    extract_dataset "$OUTPUT_DIR/$filename" "$OUTPUT_DIR/$extract_dir"
+  done <<< "$FILTERED"
 }
 
 # =========================
@@ -131,13 +135,26 @@ if [[ "$DATASET" != "all" ]]; then
   [[ -z "$FILTERED" ]] && { echo "Unknown dataset: $DATASET" >&2; exit 1; }
 fi
 
-export -f process_dataset download_dataset extract_dataset \
-         archive_exists dataset_extracted
-export OUTPUT_DIR MODE SPIDER
-
 mkdir -p "$OUTPUT_DIR"
 
-echo "$FILTERED" | grep -v '^$' \
-  | xargs -P "$THREADS" -I {} bash -c 'process_dataset "$@"' _ {}
+# =========================
+# Main execution
+# =========================
+if [[ "$SPIDER" == true ]]; then
+  download_all
+else
+  case "$MODE" in
+    download)
+      download_all
+      ;;
+    extract)
+      extract_all
+      ;;
+    all)
+      download_all
+      extract_all
+      ;;
+  esac
+fi
 
 echo "Done."
