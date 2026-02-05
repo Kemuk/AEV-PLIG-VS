@@ -1,8 +1,8 @@
 # AEV-PLIG Development Plan
 
 ## Status
-Last updated: 2026-02-02
-Current phase: Core features complete, expanding test coverage
+Last updated: 2026-02-05
+Current phase: Modernizing package configuration
 
 ## Completed
 - [x] Refactor codebase into modular package (v2.0)
@@ -15,13 +15,13 @@ Current phase: Core features complete, expanding test coverage
 - [x] Bayesian training support (auto-detect in Trainer)
 
 ## Up Next
-1. Download data script — HIGH
-2. Unit tests (Phase 2) — MEDIUM
-3. Regression tests (Phase 3) — LOW
+1. Migrate setup.py → pyproject.toml — HIGH (READY)
+2. Download data script — HIGH
+3. Unit tests (Phase 2) — MEDIUM
+4. Regression tests (Phase 3) — LOW
 
 ## Backburner
-- Dependency consolidation (setup.py extras)
-- Migrate setup.py → pyproject.toml (see notes below)
+- Dependency consolidation (optional extras for dev/test)
 
 ---
 
@@ -370,17 +370,30 @@ jobs:
 
 ---
 
-## Backburner: Migrate to pyproject.toml
+## Planned: Migrate to pyproject.toml
 
-Priority: LOW
-Status: Deferred
+Priority: HIGH
+Status: Ready for Implementation
+Last Updated: 2026-02-05
 
 ### Why Migrate
-- `setup.py` is legacy (PEP 517/518 deprecated it)
-- `pyproject.toml` is declarative and cleaner
+- `setup.py` is deprecated (PEP 517/518)
+- `pyproject.toml` is declarative, modern, and cleaner
 - Better build isolation
+- Consolidates configuration (pytest can move here too)
 
-### Proposed Structure
+### Migration Decisions (Confirmed)
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Build backend | setuptools | Most compatible, currently in use |
+| License | BSD-3-Clause | Match LICENSE.txt (setup.py incorrectly said MIT) |
+| Dependencies | All in pyproject.toml | No requirements.txt needed |
+| pytest.ini | Migrate to pyproject.toml | Consolidate configuration |
+| setup.py fate | Remove completely | Clean break, no shims |
+
+### Complete pyproject.toml Structure
+
 ```toml
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -389,31 +402,148 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aev-plig"
 version = "2.0.0"
-requires-python = ">=3.9"
+description = "Graph Neural Network-based Scoring Function for Protein-Ligand Binding Affinity Prediction"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "BSD-3-Clause"}
+authors = [
+    {name = "AEV-PLIG Development Team"}
+]
+keywords = ["bioinformatics", "chemistry", "machine-learning", "drug-discovery", "protein-ligand"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+]
 
 dependencies = [
     "torch>=2.0.0",
     "torch-geometric>=2.3.0",
-    # NOTE: torch-scatter/sparse removed - require manual install
+    "torch-scatter>=2.1.0",
     "rdkit>=2023.0.0",
     "torchani>=2.2.0",
-    # ... other deps
+    "biopandas>=0.4.0",
+    "qcelemental>=0.25.0",
+    "scikit-learn>=1.0.0",
+    "pandas>=1.5.0",
+    "numpy>=1.23.0",
+    "scipy>=1.9.0",
+    "tqdm>=4.65.0",
 ]
 
-[project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+[project.urls]
+Homepage = "https://github.com/Jnelen/AEV-PLIG"
+Repository = "https://github.com/Jnelen/AEV-PLIG"
+Documentation = "https://github.com/Jnelen/AEV-PLIG"
+
+[project.scripts]
+aev-plig-train = "scripts.train:main"
+aev-plig-predict = "scripts.predict:main"
+aev-plig-generate-graphs = "scripts.generate_pdbbind_graphs:main"
+
+[tool.setuptools]
+zip-safe = false
+
+[tool.setuptools.packages.find]
+include = ["aev_plig*", "torchani_mod*"]
+exclude = ["scripts", "tests*", "data", "output"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests",
+    "regression: marks regression tests",
+]
+filterwarnings = [
+    "ignore::FutureWarning",
+    "ignore::DeprecationWarning",
+]
 ```
 
-### torch-scatter Problem
-torch-scatter requires PyTorch at build time (imports torch in setup.py).
-pip doesn't guarantee install order, so `pip install -e .` fails on fresh env.
+### Implementation Steps
 
-**Workaround:** Don't include torch-scatter in dependencies. Document manual install:
+#### Step 1: Create pyproject.toml
+- Create new file with complete configuration above
+- Verify all 12 dependencies from setup.py fallback list are included
+- Include both `aev_plig*` and `torchani_mod*` in package discovery
+- Migrate complete pytest.ini configuration
+
+#### Step 2: Testing Phase
+Before removing old files, verify:
+1. **Installation tests:**
+   ```bash
+   pip install -e .          # Editable install
+   pip install .             # Normal install
+   python -m build           # Build wheel and sdist
+   ```
+
+2. **Package import tests:**
+   ```bash
+   python -c "import aev_plig"
+   python -c "import torchani_mod"
+   ```
+
+3. **Console scripts tests:**
+   ```bash
+   aev-plig-train --help
+   aev-plig-predict --help
+   aev-plig-generate-graphs --help
+   ```
+
+4. **Pytest integration:**
+   ```bash
+   pytest                    # Should find tests
+   pytest -v                 # Verbose mode
+   pytest -m "not slow"      # Marker filtering works
+   ```
+
+#### Step 3: Remove Legacy Files
+Once testing passes:
+- Delete `setup.py`
+- Delete `pytest.ini`
+
+#### Step 4: Documentation Updates
+Update README.md:
+- Note modern pyproject.toml-based installation
+- Remove any setup.py references
+- Update installation section if needed
+
+### Key Changes from setup.py
+
+| Item | setup.py | pyproject.toml |
+|------|----------|----------------|
+| License classifier | MIT License (WRONG) | BSD License (CORRECT) |
+| Config location | setup.py + pytest.ini | Single pyproject.toml |
+| Dependencies source | requirements.txt fallback | Declarative in [project] |
+| Package discovery | find_packages() | Explicit include/exclude |
+| Version | Hardcoded | Hardcoded (same) |
+
+### Open Questions for Future
+
+1. **Version management:** Consider dynamic versioning from `__version__`?
+2. **Optional extras:** Add `[project.optional-dependencies]` for dev/test tools?
+3. **torch-scatter compatibility:** May need manual install in some environments (known issue)
+
+### torch-scatter Installation Note
+
+If pip install fails due to torch-scatter, use manual install:
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
 pip install -e .
 ```
+
+This is a known issue where torch-scatter requires PyTorch at build time.
 
 ---
 
