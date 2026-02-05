@@ -64,6 +64,7 @@ download_all() {
 extract_dataset() {
   local archive="$1" outdir="$2"
   local marker="$outdir/.extracted"
+  local progress_marker="$outdir/.extracting"
 
   if dataset_extracted "$outdir"; then
     echo "Already extracted: $outdir"
@@ -76,12 +77,28 @@ extract_dataset() {
   fi
 
   mkdir -p "$outdir"
-  echo "Extracting: $(basename "$archive") → $outdir"
-
+  
   case "$archive" in
-    *.tar.gz) pigz -dc "$archive" | tar -xf - -C "$outdir" ;;
-    *.tar)    tar -xf "$archive" -C "$outdir" ;;
-    *) echo "Unsupported archive: $archive" >&2; return 1 ;;
+    *.tar.gz)
+      if [[ -f "$progress_marker" ]]; then
+        echo "Resuming: $(basename "$archive") → $outdir"
+        pigz -dc "$archive" | tar --checkpoint=1000 \
+                                  --checkpoint-action='echo=  %u files' \
+                                  --skip-old-files \
+                                  -xf - -C "$outdir"
+      else
+        echo "Extracting: $(basename "$archive") → $outdir"
+        touch "$progress_marker"
+        pigz -dc "$archive" | tar --checkpoint=1000 \
+                                  --checkpoint-action='echo=  %u files' \
+                                  -xf - -C "$outdir"
+      fi
+      rm -f "$progress_marker"
+      ;;
+    *)
+      echo "Unsupported archive: $archive" >&2
+      return 1
+      ;;
   esac
 
   touch "$marker"
