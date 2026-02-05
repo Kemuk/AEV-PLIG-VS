@@ -13,12 +13,12 @@ Current phase: Modernizing package configuration
 - [x] GitHub Actions CI workflow
 - [x] Bayesian last layer (GATv2NetBayesian) + minimal tests
 - [x] Bayesian training support (auto-detect in Trainer)
+- [x] Migrate setup.py → pyproject.toml (torch-scatter build fix)
 
 ## Up Next
-1. Migrate setup.py → pyproject.toml — HIGH (READY)
-2. Download data script — HIGH
-3. Unit tests (Phase 2) — MEDIUM
-4. Regression tests (Phase 3) — LOW
+1. Download data script — HIGH
+2. Unit tests (Phase 2) — MEDIUM
+3. Regression tests (Phase 3) — LOW
 
 ## Backburner
 - Dependency consolidation (optional extras for dev/test)
@@ -373,7 +373,7 @@ jobs:
 ## Planned: Migrate to pyproject.toml
 
 Priority: HIGH
-Status: Ready for Implementation
+Status: COMPLETED
 Last Updated: 2026-02-05
 
 ### Why Migrate
@@ -396,7 +396,7 @@ Last Updated: 2026-02-05
 
 ```toml
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel", "torch>=2.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -534,16 +534,36 @@ Update README.md:
 2. **Optional extras:** Add `[project.optional-dependencies]` for dev/test tools?
 3. **torch-scatter compatibility:** May need manual install in some environments (known issue)
 
-### torch-scatter Installation Note
+### torch-scatter Installation Solution
 
-If pip install fails due to torch-scatter, use manual install:
+**Problem:** torch-scatter requires PyTorch available at build time, but pip doesn't guarantee dependency installation order.
+
+**Solution:** Add torch to `[build-system].requires` to ensure it's installed before torch-scatter builds.
+
+```toml
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "torch>=2.0.0"]
+```
+
+**How it works:**
+1. PEP 517/518 mandates build-system requirements are installed first
+2. torch is available in the isolated build environment
+3. torch-scatter can build successfully
+4. Single command installation: `pip install -e .`
+
+**Trade-off:** torch is installed in both the build environment and user environment, but pip caches wheels so the second install is fast.
+
+**Installation:**
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+# Single command - handles everything automatically
 pip install -e .
 ```
 
-This is a known issue where torch-scatter requires PyTorch at build time.
+For CUDA-specific PyTorch installations, install torch first:
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install -e .
+```
 
 ---
 
