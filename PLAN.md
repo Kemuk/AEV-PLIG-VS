@@ -14,6 +14,7 @@ Current phase: Modernizing package configuration
 - [x] Bayesian last layer (GATv2NetBayesian) + minimal tests
 - [x] Bayesian training support (auto-detect in Trainer)
 - [x] Migrate setup.py → pyproject.toml (torch-scatter build fix)
+- [x] Add missing torchani_mod dependencies (lark, requests)
 
 ## Up Next
 1. Download data script — HIGH
@@ -435,6 +436,8 @@ dependencies = [
     "numpy>=1.23.0",
     "scipy>=1.9.0",
     "tqdm>=4.65.0",
+    "lark>=1.1.0",
+    "requests>=2.28.0",
 ]
 
 [project.urls]
@@ -564,6 +567,72 @@ For CUDA-specific PyTorch installations, install torch first:
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install -e .
 ```
+
+### Missing Dependencies Fix (torchani_mod)
+
+**Problem:** The vendored `torchani_mod` package has dependencies not declared in original setup.py.
+
+**Symptoms:**
+```
+ModuleNotFoundError: No module named 'lark'
+```
+
+**Root Cause:**
+- `torchani_mod/__init__.py` imports `neurochem` module unconditionally
+- `torchani_mod/neurochem/__init__.py` requires `lark` and `requests`
+- These were not in the original dependency list
+
+**Solution:** Added missing dependencies:
+- `lark>=1.1.0` - for neurochem resource parser
+- `requests>=2.28.0` - for neurochem resource downloading
+
+**Dependencies Added:**
+```toml
+dependencies = [
+    # ... existing dependencies ...
+    "lark>=1.1.0",       # NEW - torchani_mod.neurochem parser
+    "requests>=2.28.0",  # NEW - torchani_mod.neurochem resources
+]
+```
+
+### HPC Installation Workflow
+
+**Recommended approach for HPC clusters:**
+
+1. **Load required modules:**
+   ```bash
+   module load cuda/12.1    # Adjust version for your cluster
+   module load gcc/11       # May be needed for compilation
+   ```
+
+2. **Activate conda environment:**
+   ```bash
+   conda activate aev-plig
+   ```
+
+3. **Install with --no-build-isolation** (faster on HPC):
+   ```bash
+   pip install -e . --no-build-isolation
+   ```
+
+   **Why --no-build-isolation?**
+   - Reuses environment's torch installation
+   - Avoids downloading/rebuilding torch in isolated environment
+   - Faster installation on HPC with pre-installed dependencies
+   - Works well when torch is already installed from conda/pip
+
+4. **Verify installation:**
+   ```bash
+   python -c "import aev_plig; import torchani_mod"
+   python scripts/generate_pdbbind_graphs.py --help
+   ```
+
+**Alternative (standard method):**
+```bash
+pip install -e .   # Uses build isolation, slower but more reproducible
+```
+
+**Important:** Keep CUDA module loaded for all sessions where you run GPU-enabled code.
 
 ---
 
