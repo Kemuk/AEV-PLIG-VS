@@ -80,14 +80,14 @@ extract_dataset() {
   
   case "$archive" in
     *.tar.gz)
-      local size=$(pigz -l "$archive" | tail -1 | awk '{print $2}')
+      local size=$(stat -c%s "$archive")
       if [[ -f "$progress_marker" ]]; then
         echo "Resuming: $(basename "$archive") → $outdir"
-        pigz -dc -p "$THREADS" "$archive" | pv -s "$size" | tar --skip-old-files -xf - -C "$outdir"
+        pv -s "$size" "$archive" | pigz -dc -p "$THREADS" | tar --skip-old-files -xf - -C "$outdir"
       else
         echo "Extracting: $(basename "$archive") → $outdir"
         touch "$progress_marker"
-        pigz -dc -p "$THREADS" "$archive" | pv -s "$size" | tar -xf - -C "$outdir"
+        pv -s "$size" "$archive" | pigz -dc -p "$THREADS" | tar -xf - -C "$outdir"
       fi
       rm -f "$progress_marker"
       ;;
