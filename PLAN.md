@@ -17,12 +17,315 @@ Current phase: Modernizing package configuration
 - [x] Add missing torchani_mod dependencies (lark, requests)
 
 ## Up Next
-1. Download data script — HIGH
-2. Unit tests (Phase 2) — MEDIUM
-3. Regression tests (Phase 3) — LOW
+1. **SLURM HPC Workflow** — URGENT (see detailed plan below)
+2. Download data script — HIGH
+3. Unit tests (Phase 2) — MEDIUM
+4. Regression tests (Phase 3) — LOW
 
 ## Backburner
 - Dependency consolidation (optional extras for dev/test)
+
+---
+
+## Planned: SLURM HPC Workflow
+
+Priority: URGENT
+Status: Planning Complete, Ready to Implement
+Last Updated: 2026-02-08
+
+### Purpose
+Create a complete SLURM workflow for running the AEV-PLIG pipeline on the HTC cluster at the user's HPC facility. This workflow automates:
+1. Graph generation from protein-ligand complexes (3 datasets in parallel)
+2. PyTorch data creation (train/valid/test splits)
+3. Bayesian model training (ensemble of 5 models)
+4. Prediction with uncertainty quantification
+
+### Target Cluster: HTC
+- Cluster name: `htc`
+- All jobs must use `--cluster=htc`
+- Available partitions:
+  - **short**: 12h max (for most jobs)
+  - **medium**: 2 days max
+  - **long**: unlimited (for training)
+  - **devel**: 10 min max (TESTS ONLY)
+  - **interactive**: 4h max (for interactive testing)
+
+### Folder Structure (Option B - Organized)
+
+```
+slurm/
+├── env.sh                          # Common environment setup (modules, conda)
+├── config.sh                       # Configuration parameters & hyperparameters
+│
+├── jobs/                           # Production SLURM batch jobs
+│   ├── 01_generate_graphs.sh      # Generate graphs (8h, 32GB, 4 CPUs)
+│   ├── 02_create_data.sh          # Create PyTorch data (2h, 20GB, 8 CPUs)
+│   ├── 03_train.sh                # Train model (24h, 20GB, 8 CPUs, GPU)
+│   └── 04_predict.sh              # Predict (4h, 20GB, 8 CPUs, GPU)
+│
+├── tests/                          # Testing infrastructure
+│   ├── jobs/                       # Quick test SLURM jobs
+│   │   ├── 01_generate_graphs_quick.sh   # Test graph gen (30min)
+│   │   └── 03_train_quick.sh             # Test training (2h, 5 epochs)
+│   ├── test_slurm.sh               # Test SLURM submission (devel partition)
+│   ├── test_local.sh               # Test in interactive session
+│   └── validate_environment.sh     # Validate setup
+│
+├── submit_training.sh              # Submit: graphs → data → train
+├── submit_prediction.sh            # Submit: predict only
+└── submit_slurm.sh                 # Submit: full pipeline
+```
+
+**Rationale for Structure:**
+- Based on best practices from scientific ML projects (PyTorch, CSCfi, y0ast/slurm-for-ml)
+- Separates SLURM batch jobs (jobs/) from bash scripts (submit_*.sh)
+- Isolates all testing in tests/ subdirectory
+- More organized than typical flat structures while still following HPC conventions
+
+### Resource Specifications
+
+#### Production Jobs
+
+| Job | Partition | Time | Memory | CPUs | GPU | Notes |
+|-----|-----------|------|--------|------|-----|-------|
+| 01_generate_graphs.sh | short | 08:00:00 | 32GB | 4 | - | 3 parallel processes |
+| 02_create_data.sh | short | 02:00:00 | 20GB | 8 | - | Single process |
+| 03_train.sh | long | 24:00:00 | 20GB | 8 | gpu:1 | Ensemble of 5 models |
+| 04_predict.sh | short | 04:00:00 | 20GB | 8 | gpu:1 | Predictions + uncertainty |
+
+#### Test Jobs (devel partition only)
+
+All test submissions use `--partition=devel` with 10-minute time limit and reduced resources.
+
+### Pipeline Flow
+
+```
+01_generate_graphs.sh (afterok)
+    ↓
+02_create_data.sh (afterok)
+    ↓
+03_train.sh (afterok)
+    ↓
+04_predict.sh
+```
+
+**Job Dependencies:**
+- Use `--dependency=afterok:$JOB_ID` for sequential execution
+- Automatic failure propagation (jobs cancelled if dependency fails)
+
+### Environment Setup (slurm/env.sh)
+
+**Common environment for all jobs:**
+- Load modules: `cuda/12.1`, `gcc/11`
+- Activate conda: `aev-plig`
+- Export paths: `PROJECT_ROOT`, `DATA_DIR`, `SCRIPTS_DIR`, `MODELS_DIR`, `RESULTS_DIR`
+- Create directories: `trained_models/`, `results/`, `logs/`
+- Print diagnostics: node, date, GPU info
+
+**Usage:** All SLURM scripts source this file:
+```bash
+source slurm/env.sh
+```
+
+### Configuration (slurm/config.sh)
+
+**Centralized configuration:**
+- Cluster name: `CLUSTER_NAME="htc"`
+- Partition names: `PARTITION_SHORT`, `PARTITION_LONG`, etc.
+- Memory presets: `MEM_STANDARD=20GB`, `MEM_LARGE=32GB`
+- Model hyperparameters:
+  - `MODEL_NAME="GATv2NetBayesian"`
+  - `DATASET_NAME="pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"`
+  - `BATCH_SIZE=128`, `EPOCHS=200`, `HIDDEN_DIM=256`, `NUM_HEADS=3`
+  - `LEARNING_RATE=0.00012291937615434127`, `ACTIVATION_FN="leaky_relu"`
+
+**Benefit:** Change hyperparameters in one place without editing individual job scripts.
+
+### Memory Management
+
+**Graph Generation (01):**
+- Runs 3 Python processes in parallel (`&` and `wait`)
+- Each process has isolated memory (automatic cleanup between processes)
+- No explicit memory clearing needed
+
+**Data Creation (02):**
+- Single Python process
+- Loads all pickle files at once (pdbbind, bindingnet, bindingdb)
+- Memory clears automatically when process exits
+
+**Training/Prediction (03, 04):**
+- Single Python process per job
+- GPU memory: 20GB (sufficient for batch_size=128)
+
+### Testing Strategy
+
+**Three-tier testing:**
+
+1. **Environment Validation** (`validate_environment.sh`)
+   - Check conda environment exists
+   - Verify Python packages (torch, torch_geometric, torch_scatter, aev_plig)
+   - Check CUDA availability
+   - Verify data files and scripts exist
+   - Run before submitting any jobs
+
+2. **Local Interactive Testing** (`test_local.sh`)
+   - Run in interactive session: `srun --cluster=htc --partition=interactive --mem=20GB --cpus-per-task=4 --gres=gpu:1 --time=04:00:00 --pty bash`
+   - Test imports, data loading, model creation
+   - Fast iteration without SLURM queue
+
+3. **SLURM Submission Testing** (`test_slurm.sh`)
+   - Submit all 4 jobs to devel partition (10 min limit)
+   - Tests job submission and dependency chain
+   - Jobs will likely timeout - this is expected
+   - Verifies SLURM syntax and cluster configuration
+
+### Submission Scripts
+
+**submit_training.sh** (graphs → data → train):
+```bash
+J1=$(sbatch --cluster=htc --parsable slurm/jobs/01_generate_graphs.sh)
+J2=$(sbatch --cluster=htc --parsable --dependency=afterok:$J1 slurm/jobs/02_create_data.sh)
+J3=$(sbatch --cluster=htc --parsable --dependency=afterok:$J2 slurm/jobs/03_train.sh)
+```
+
+**submit_prediction.sh** (predict only):
+```bash
+sbatch --cluster=htc slurm/jobs/04_predict.sh
+```
+
+**submit_slurm.sh** (full pipeline):
+```bash
+# Chains all 4 jobs with dependencies
+```
+
+### Quick Test Jobs
+
+For rapid testing without full pipeline:
+
+- **01_generate_graphs_quick.sh**: Generate only PDBbind graphs (smallest dataset), 30 min
+- **03_train_quick.sh**: Train for 5 epochs only (vs 200), 2h
+
+**Use case:** Verify environment setup, test code changes, check GPU allocation
+
+### Implementation Files (14 total)
+
+**Configuration (2):**
+- `slurm/env.sh`
+- `slurm/config.sh`
+
+**Production Jobs (4):**
+- `slurm/jobs/01_generate_graphs.sh`
+- `slurm/jobs/02_create_data.sh`
+- `slurm/jobs/03_train.sh`
+- `slurm/jobs/04_predict.sh`
+
+**Submission Scripts (3):**
+- `slurm/submit_training.sh`
+- `slurm/submit_prediction.sh`
+- `slurm/submit_slurm.sh`
+
+**Test Scripts (3):**
+- `slurm/tests/validate_environment.sh`
+- `slurm/tests/test_local.sh`
+- `slurm/tests/test_slurm.sh`
+
+**Quick Test Jobs (2):**
+- `slurm/tests/jobs/01_generate_graphs_quick.sh`
+- `slurm/tests/jobs/03_train_quick.sh`
+
+### Key Design Decisions
+
+1. **env.sh + config.sh** (NOT YAML):
+   - Standard practice for SLURM workflows
+   - No external dependencies (PyYAML, etc.)
+   - Easy to source and use in bash scripts
+   - YAML config documented for future enhancement
+
+2. **Structured folders** (NOT flat):
+   - More organized than most scientific repos
+   - Clear separation: jobs/ vs tests/
+   - Easy to navigate and maintain
+   - Balances organization with HPC conventions
+
+3. **Memory consistency**:
+   - All jobs use 20GB except graph generation (32GB for 3 parallel processes)
+   - Simplifies resource allocation
+   - Matches GPU memory requirements
+
+4. **Partition selection**:
+   - short: Most jobs fit in 12h limit
+   - long: Only training (24h required for 200 epochs)
+   - devel: Only for test_slurm.sh submissions
+
+5. **Test philosophy**:
+   - Validate environment first
+   - Test locally in interactive session
+   - Test SLURM submission on devel
+   - Quick test jobs for rapid iteration
+   - Never waste production resources on testing
+
+### Future Enhancements (Documented for Later)
+
+**Config-driven workflow (YAML):**
+- `slurm/config.yaml` for all parameters
+- `slurm/load_config.py` to parse and export env vars
+- Better for experiment tracking and reproducibility
+- Standard in scientific ML workflows
+- Deferred until after initial implementation
+
+**Workflow managers:**
+- Snakemake integration for complex dependencies
+- Nextflow for pipeline orchestration
+- Too heavy for current needs (4-job linear pipeline)
+
+### Usage Examples
+
+**Standard workflow:**
+```bash
+# 1. Validate environment
+./slurm/tests/validate_environment.sh
+
+# 2. Submit training pipeline
+./slurm/submit_training.sh
+
+# 3. Monitor
+squeue -u $USER --cluster=htc
+
+# 4. View logs
+tail -f logs/train_*.out
+```
+
+**Testing workflow:**
+```bash
+# Interactive testing
+srun --cluster=htc --partition=interactive --mem=20GB --cpus-per-task=4 --gres=gpu:1 --time=04:00:00 --pty bash
+./slurm/tests/test_local.sh
+
+# SLURM submission testing
+./slurm/tests/test_slurm.sh
+```
+
+**Quick test:**
+```bash
+# Test graph generation only
+sbatch --cluster=htc slurm/tests/jobs/01_generate_graphs_quick.sh
+
+# Test training with 5 epochs
+sbatch --cluster=htc slurm/tests/jobs/03_train_quick.sh
+```
+
+### References
+
+**Best Practices:**
+- [SLURM Workflows Best Practices - ARCC](https://arccwiki.atlassian.net/wiki/spaces/DOCUMENTAT/pages/2231795764/Slurm+Workflows+and+Best+Practices)
+- [NASA NCCS SLURM Best Practices](https://www.nccs.nasa.gov/nccs-users/instructional/using-slurm/best-practices)
+- [BIH HPC Project Structure](https://hpc-docs.cubi.bihealth.org/best-practice/project-structure/)
+- [HBC Training: Data Organization](https://hbctraining.github.io/Intro-to-rnaseq-hpc-salmon/lessons/01_data_organization.html)
+
+**Example Repositories:**
+- [CSCfi/machine-learning-scripts](https://github.com/CSCfi/machine-learning-scripts/tree/master/slurm) - ML on SLURM
+- [y0ast/slurm-for-ml](https://github.com/y0ast/slurm-for-ml) - Hyperparameter search workflow
+- [PyTorch SLURM Examples](https://github.com/pytorch/examples/tree/main/distributed/ddp-tutorial-series/slurm) - Distributed training
 
 ---
 
