@@ -133,10 +133,15 @@ def train_ensemble(args):
     print(f"{'='*60}\n")
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the training script."""
     start_time = time.time()
 
     args = parse_args()
     train_ensemble(args)
 
     print(f"Total time: {time.time() - start_time:.2f} seconds")
+
+
+if __name__ == "__main__":
+    main()

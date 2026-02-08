@@ -201,7 +201,7 @@ def compute_aevs(protein_path, mol, atom_keys, radial_coefs, atom_map, use_biopa
 
     AEVC = torchani_mod.AEVComputer(RcR, RcA, EtaR, RsR, EtaA, Zeta, RsA, TsA, len(atom_symbols))
 
-    SC = torchani.SpeciesConverter(atom_symbols)
+    SC = torchani_mod.SpeciesConverter(atom_symbols)
     sc = SC((atomicnums, coordinates))
 
     # Call modified forward method with mol_len to separate ligand from protein
