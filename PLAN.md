@@ -1,8 +1,8 @@
 # AEV-PLIG Development Plan
 
 ## Status
-Last updated: 2026-02-05
-Current phase: Modernizing package configuration
+Last updated: 2026-02-09
+Current phase: HPC workflow implementation
 
 ## Completed
 - [x] Refactor codebase into modular package (v2.0)
@@ -15,23 +15,27 @@ Current phase: Modernizing package configuration
 - [x] Bayesian training support (auto-detect in Trainer)
 - [x] Migrate setup.py → pyproject.toml (torch-scatter build fix)
 - [x] Add missing torchani_mod dependencies (lark, requests)
+- [x] SLURM HPC workflow (13 scripts, see details below)
+- [x] Add `Config.MODEL_NAME` — single source of truth for default model
+- [x] Add `.predict()` method to models — uniform inference interface
+- [x] Add `--model` flag to `predict.py` — was hardcoded to GATv2Net
+- [x] Fix `predict.py` to pass model class (not instance) to Predictor
 
 ## Up Next
-1. **SLURM HPC Workflow** — URGENT (see detailed plan below)
-2. Download data script — HIGH
-3. Unit tests (Phase 2) — MEDIUM
-4. Regression tests (Phase 3) — LOW
+1. Download data script — HIGH
+2. Unit tests (Phase 2) — MEDIUM
+3. Regression tests (Phase 3) — LOW
 
 ## Backburner
 - Dependency consolidation (optional extras for dev/test)
 
 ---
 
-## Planned: SLURM HPC Workflow
+## SLURM HPC Workflow
 
 Priority: URGENT
-Status: Planning Complete, Ready to Implement
-Last Updated: 2026-02-08
+Status: Implemented
+Last Updated: 2026-02-09
 
 ### Purpose
 Create a complete SLURM workflow for running the AEV-PLIG pipeline on the HTC cluster at the user's HPC facility. This workflow automates:
@@ -50,12 +54,11 @@ Create a complete SLURM workflow for running the AEV-PLIG pipeline on the HTC cl
   - **devel**: 10 min max (TESTS ONLY)
   - **interactive**: 4h max (for interactive testing)
 
-### Folder Structure (Option B - Organized)
+### Folder Structure
 
 ```
 slurm/
-├── env.sh                          # Common environment setup (modules, conda)
-├── config.sh                       # Configuration parameters & hyperparameters
+├── config.sh                       # Environment setup + cluster settings (merged)
 │
 ├── jobs/                           # Production SLURM batch jobs
 │   ├── 01_generate_graphs.sh      # Generate graphs (8h, 32GB, 4 CPUs)
@@ -69,18 +72,17 @@ slurm/
 │   │   └── 03_train_quick.sh             # Test training (2h, 5 epochs)
 │   ├── test_slurm.sh               # Test SLURM submission (devel partition)
 │   ├── test_local.sh               # Test in interactive session
-│   └── validate_environment.sh     # Validate setup
+│   └── test_environment.sh         # Validate setup
 │
 ├── submit_training.sh              # Submit: graphs → data → train
 ├── submit_prediction.sh            # Submit: predict only
 └── submit_slurm.sh                 # Submit: full pipeline
 ```
 
-**Rationale for Structure:**
-- Based on best practices from scientific ML projects (PyTorch, CSCfi, y0ast/slurm-for-ml)
-- Separates SLURM batch jobs (jobs/) from bash scripts (submit_*.sh)
-- Isolates all testing in tests/ subdirectory
-- More organized than typical flat structures while still following HPC conventions
+**Design decisions:**
+- `env.sh` and `config.sh` merged into single `config.sh` — every job sources one file
+- No hyperparameter duplication — Python defaults in `aev_plig/config.py` are the single source of truth. `config.sh` only has SLURM settings and runtime choices (model name, dataset name)
+- Prediction (job 04) submitted separately because trained model name includes a timestamp
 
 ### Resource Specifications
 
@@ -113,33 +115,28 @@ All test submissions use `--partition=devel` with 10-minute time limit and reduc
 - Use `--dependency=afterok:$JOB_ID` for sequential execution
 - Automatic failure propagation (jobs cancelled if dependency fails)
 
-### Environment Setup (slurm/env.sh)
-
-**Common environment for all jobs:**
-- Load modules: `cuda/12.1`, `gcc/11`
-- Activate conda: `aev-plig`
-- Export paths: `PROJECT_ROOT`, `DATA_DIR`, `SCRIPTS_DIR`, `MODELS_DIR`, `RESULTS_DIR`
-- Create directories: `trained_models/`, `results/`, `logs/`
-- Print diagnostics: node, date, GPU info
-
-**Usage:** All SLURM scripts source this file:
-```bash
-source slurm/env.sh
-```
-
 ### Configuration (slurm/config.sh)
 
-**Centralized configuration:**
+**Merged environment setup + cluster settings. All jobs source this file:**
+```bash
+source "$(dirname "$0")/../config.sh"
+```
+
+**Modules loaded:** `Anaconda3`, `Boost/1.77.0-GCC-11.2.0`, `CUDA`
+
+**Conda environment:** `$DATA/envs/aev-plig` (bin added to PATH)
+
+**SLURM settings:**
 - Cluster name: `CLUSTER_NAME="htc"`
 - Partition names: `PARTITION_SHORT`, `PARTITION_LONG`, etc.
 - Memory presets: `MEM_STANDARD=20GB`, `MEM_LARGE=32GB`
-- Model hyperparameters:
-  - `MODEL_NAME="GATv2NetBayesian"`
-  - `DATASET_NAME="pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"`
-  - `BATCH_SIZE=128`, `EPOCHS=200`, `HIDDEN_DIM=256`, `NUM_HEADS=3`
-  - `LEARNING_RATE=0.00012291937615434127`, `ACTIVATION_FN="leaky_relu"`
 
-**Benefit:** Change hyperparameters in one place without editing individual job scripts.
+**Runtime choices (not hyperparameters):**
+- `MODEL_NAME="GATv2NetBayesian"`
+- `DATASET_NAME="pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"`
+
+Hyperparameters (lr, epochs, batch_size, etc.) are NOT duplicated here — they use
+Python defaults from `aev_plig/config.py` as the single source of truth.
 
 ### Memory Management
 
@@ -161,7 +158,7 @@ source slurm/env.sh
 
 **Three-tier testing:**
 
-1. **Environment Validation** (`validate_environment.sh`)
+1. **Environment Validation** (`test_environment.sh`)
    - Check conda environment exists
    - Verify Python packages (torch, torch_geometric, torch_scatter, aev_plig)
    - Check CUDA availability
@@ -207,11 +204,10 @@ For rapid testing without full pipeline:
 
 **Use case:** Verify environment setup, test code changes, check GPU allocation
 
-### Implementation Files (14 total)
+### Implementation Files (13 total)
 
-**Configuration (2):**
-- `slurm/env.sh`
-- `slurm/config.sh`
+**Configuration (1):**
+- `slurm/config.sh` (merged environment + cluster settings)
 
 **Production Jobs (4):**
 - `slurm/jobs/01_generate_graphs.sh`
@@ -225,7 +221,7 @@ For rapid testing without full pipeline:
 - `slurm/submit_slurm.sh`
 
 **Test Scripts (3):**
-- `slurm/tests/validate_environment.sh`
+- `slurm/tests/test_environment.sh`
 - `slurm/tests/test_local.sh`
 - `slurm/tests/test_slurm.sh`
 
@@ -235,10 +231,10 @@ For rapid testing without full pipeline:
 
 ### Key Design Decisions
 
-1. **env.sh + config.sh** (NOT YAML):
-   - Standard practice for SLURM workflows
+1. **Single config.sh** (NOT separate env.sh + config.sh, NOT YAML):
+   - Merged environment setup and cluster settings into one file
+   - No hyperparameter duplication — Python config.py is the single source of truth
    - No external dependencies (PyYAML, etc.)
-   - Easy to source and use in bash scripts
    - YAML config documented for future enhancement
 
 2. **Structured folders** (NOT flat):

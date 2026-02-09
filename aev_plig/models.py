@@ -120,6 +120,10 @@ class GATv2Net(torch.nn.Module):
 
         return self.out(x)
 
+    def predict(self, data):
+        """Return point predictions for inference."""
+        return self.forward(data)
+
 
 class GATv2NetBayesian(torch.nn.Module):
     """
@@ -231,6 +235,11 @@ class GATv2NetBayesian(torch.nn.Module):
         var = F.softplus(self.logvar_head(x)) + 1e-6  # Ensure variance is positive
 
         return mean, var
+
+    def predict(self, data):
+        """Return point predictions for inference (mean only)."""
+        mean, _ = self.forward(data)
+        return mean
 
 
 # Model registry for easy model selection
