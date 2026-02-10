@@ -17,7 +17,7 @@ echo "Submitting test jobs to devel partition (10 min limit)..."
 echo "NOTE: Jobs are expected to timeout. This tests submission only."
 echo ""
 
-J1=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES "$JOBS_DIR/01_generate_graphs.sh" | cut -d';' -f1)
+J1=$(sbatch --cluster=arc --parsable $DEVEL_OVERRIDES "$JOBS_DIR/01_generate_graphs.sh" | cut -d';' -f1)
 echo "  01_generate_graphs: $J1"
 
 J2=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES --dependency=afterok:"$J1" "$JOBS_DIR/02_create_data.sh" | cut -d';' -f1)
