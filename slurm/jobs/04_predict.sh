@@ -16,7 +16,7 @@
 #   export TRAINED_MODEL_NAME="20260208-143000_model_GATv2NetBayesian_pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"
 # =============================================================================
 
-source "$(dirname "$0")/../config.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
 
 # --- Required: set these before submission ---
 TRAINED_MODEL_NAME="${TRAINED_MODEL_NAME:?Error: set TRAINED_MODEL_NAME before running this job}"

@@ -28,6 +28,12 @@ Current phase: HPC workflow implementation
 
 ## Backburner
 - Dependency consolidation (optional extras for dev/test)
+- Add `--skip-graphs` flag to `submit_training.sh` — LOW
+  - Allow skipping graph generation when pickles already exist
+  - Would enable: `./slurm/submit_training.sh --skip-graphs`
+  - Benefits: Faster iteration, avoid re-generating graphs
+  - Requires: Conditional job submission logic in submission script
+  - Status: Planned but not critical, adds minimal technical debt
 
 ---
 

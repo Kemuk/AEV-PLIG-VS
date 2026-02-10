@@ -14,7 +14,7 @@
 # All hyperparameters (lr, epochs, batch_size, etc.) use Python defaults.
 # =============================================================================
 
-source "$(dirname "$0")/../config.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
 
 echo "Training model: $MODEL_NAME"
 echo "Dataset: $DATASET_NAME"
