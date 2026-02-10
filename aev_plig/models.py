@@ -34,13 +34,16 @@ class GATv2Net(torch.nn.Module):
     Args:
         node_feature_dim: Dimension of node features
         edge_feature_dim: Dimension of edge features
-        config: Configuration object or namespace with model parameters
+        config: Configuration object or namespace with model parameters (optional, defaults to Config)
     """
 
-    def __init__(self, node_feature_dim, edge_feature_dim, config):
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
         super(GATv2Net, self).__init__()
 
         # Get configuration parameters
+        if config is None:
+            config = Config
+        
         if hasattr(config, 'activation_function'):
             self.act = config.activation_function
         else:
@@ -141,13 +144,16 @@ class GATv2NetBayesian(torch.nn.Module):
     Args:
         node_feature_dim: Dimension of node features
         edge_feature_dim: Dimension of edge features
-        config: Configuration object or namespace with model parameters
+        config: Configuration object or namespace with model parameters (optional, defaults to Config)
     """
 
-    def __init__(self, node_feature_dim, edge_feature_dim, config):
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
         super(GATv2NetBayesian, self).__init__()
 
         # Get configuration parameters
+        if config is None:
+            config = Config
+        
         if hasattr(config, 'activation_function'):
             self.act = config.activation_function
         else:
