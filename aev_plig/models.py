@@ -261,13 +261,27 @@ def get_model(name, **kwargs):
 
     Args:
         name: Model name (e.g., 'GATv2Net')
-        **kwargs: Arguments to pass to model constructor
+        **kwargs: Arguments to pass to model constructor. Common arguments:
+            - node_feature_dim (int): Dimension of node features
+            - edge_feature_dim (int): Dimension of edge features
+            - config (optional): Configuration object or namespace with model parameters.
+                               If not provided, uses defaults from Config class.
 
     Returns:
         torch.nn.Module: Instantiated model
 
     Raises:
         KeyError: If model name is not in registry
+    
+    Example:
+        >>> # Create model with default config
+        >>> model = get_model('GATv2Net', node_feature_dim=25, edge_feature_dim=4)
+        >>> 
+        >>> # Create model with custom config
+        >>> class CustomConfig:
+        ...     hidden_dim = 128
+        ...     head = 4
+        >>> model = get_model('GATv2Net', node_feature_dim=25, edge_feature_dim=4, config=CustomConfig())
     """
     if name not in MODEL_REGISTRY:
         raise KeyError(f"Model '{name}' not found in registry. Available models: {list(MODEL_REGISTRY.keys())}")
