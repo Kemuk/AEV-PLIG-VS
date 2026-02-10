@@ -7,12 +7,13 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --output=logs/graphs_%j.out
 #SBATCH --error=logs/graphs_%j.err
+#SBATCH --chdir=$DATA/AEV-PLIG-VS
 # =============================================================================
 # Step 1: Generate molecular graphs for all three datasets sequentially.
 # Each script reads structures from data/ and writes a .pickle file.
 # =============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
+source slurm/config.sh
 
 echo "Starting graph generation for 3 datasets sequentially..."
 

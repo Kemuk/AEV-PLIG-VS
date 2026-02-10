@@ -56,8 +56,8 @@ aev-plig-generate-graphs = "scripts.generate_pdbbind_graphs:main"
 zip-safe = false
 
 [tool.setuptools.packages.find]
-include = ["aev_plig*", "torchani_mod*"]
-exclude = ["scripts", "tests*", "data", "output"]
+include = ["aev_plig*", "torchani_mod*", "scripts*"]
+exclude = ["tests*", "data", "output"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -8,18 +8,19 @@
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
+#SBATCH --chdir=$DATA/AEV-PLIG-VS
 # =============================================================================
 # Step 3: Train model ensemble.
 # Trains all ensemble members (seeds defined in aev_plig/config.py).
 # All hyperparameters (lr, epochs, batch_size, etc.) use Python defaults.
 # =============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
+source slurm/config.sh
 
 echo "Training model: $MODEL_NAME"
 echo "Dataset: $DATASET_NAME"
 
-aev-plig-train \
+python scripts/train.py \
     --model "$MODEL_NAME" \
     --dataset "$DATASET_NAME"
 

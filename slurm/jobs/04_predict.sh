@@ -8,6 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/predict_%j.out
 #SBATCH --error=logs/predict_%j.err
+#SBATCH --chdir=$DATA/AEV-PLIG-VS
 # =============================================================================
 # Step 4: Run predictions with a trained model ensemble.
 #
@@ -16,7 +17,7 @@
 #   export TRAINED_MODEL_NAME="20260208-143000_model_GATv2NetBayesian_pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"
 # =============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
+source slurm/config.sh
 
 # --- Required: set these before submission ---
 TRAINED_MODEL_NAME="${TRAINED_MODEL_NAME:?Error: set TRAINED_MODEL_NAME before running this job}"
@@ -27,7 +28,7 @@ echo "Model:   $TRAINED_MODEL_NAME"
 echo "Input:   $PREDICT_CSV"
 echo "Output:  $PREDICT_NAME"
 
-aev-plig-predict \
+python scripts/predict.py \
     --model "$MODEL_NAME" \
     --trained_model_name "$TRAINED_MODEL_NAME" \
     --dataset_csv "$PREDICT_CSV" \
