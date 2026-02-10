@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=aev-graphs
-#SBATCH --cluster=arc
+#SBATCH --cluster=htc
 #SBATCH --partition=short
 #SBATCH --time=08:00:00
 #SBATCH --mem=32GB

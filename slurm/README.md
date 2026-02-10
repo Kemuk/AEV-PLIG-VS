@@ -46,16 +46,16 @@ tail -f logs/train_JOB_ID.out
 ### Job Flow
 
 ```
-01_generate_graphs.sh  (8h, 32GB, 4 CPUs)
+01_generate_graphs.sh  (8h, 32GB, 16 CPUs)  [htc cluster]
          ↓ (afterok)
-02_create_data.sh      (2h, 20GB, 8 CPUs)
+02_create_data.sh      (2h, 20GB, 8 CPUs)   [htc cluster]
          ↓ (afterok)
-03_train.sh            (24h, 20GB, 8 CPUs, 1 GPU)
+03_train.sh            (24h, 20GB, 8 CPUs, 1 GPU)  [htc cluster]
          ↓ (manual)
-04_predict.sh          (4h, 20GB, 8 CPUs, 1 GPU)
+04_predict.sh          (4h, 20GB, 8 CPUs, 1 GPU)   [htc cluster]
 ```
 
-Jobs use `--dependency=afterok:$JOB_ID` to ensure sequential execution. If any job fails, subsequent jobs are automatically cancelled.
+All jobs run on the HTC cluster and use native SLURM `--dependency=afterok:$JOB_ID` to ensure sequential execution. If any job fails, subsequent jobs are automatically cancelled.
 
 ### Individual Jobs
 
@@ -76,12 +76,12 @@ wait  # Wait for all three to complete
 ```
 
 This is **NOT** multiple SLURM jobs - it's parallel execution within a single job using shell background processes. This approach:
-- Maximizes CPU utilization (uses all 4 allocated CPUs)
+- Maximizes CPU utilization (uses all 16 allocated CPUs)
 - Provides isolated memory per process (automatic cleanup)
 - Reduces queue time (one job submission instead of three)
 - Simplified dependency management
 
-**Resources:** 32GB RAM (to accommodate 3 parallel processes), 4 CPUs, 8 hours
+**Resources:** 32GB RAM (to accommodate 3 parallel processes), 16 CPUs, 8 hours
 
 #### 02_create_data.sh - Dataset Creation
 
