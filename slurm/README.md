@@ -67,21 +67,20 @@ All jobs run on the HTC cluster and use native SLURM `--dependency=afterok:$JOB_
 - Each script processes one dataset independently
 - Outputs: `pdbbind.pickle`, `bindingnet.pickle`, `bindingdb.pickle`
 
-**Parallel Processing Details:**
+**Sequential Processing Details:**
 ```bash
-python scripts/generate_pdbbind_graphs.py &     # Background process 1
-python scripts/generate_bindingnet_graphs.py &  # Background process 2
-python scripts/generate_bindingdb_graphs.py &   # Background process 3
-wait  # Wait for all three to complete
+python scripts/generate_pdbbind_graphs.py     # Process PDBbind dataset
+python scripts/generate_bindingnet_graphs.py  # Process BindingNet dataset
+python scripts/generate_bindingdb_graphs.py   # Process BindingDB dataset
 ```
 
-This is **NOT** multiple SLURM jobs - it's parallel execution within a single job using shell background processes. This approach:
-- Maximizes CPU utilization (uses all 16 allocated CPUs)
-- Provides isolated memory per process (automatic cleanup)
-- Reduces queue time (one job submission instead of three)
-- Simplified dependency management
+Scripts run **sequentially** within a single SLURM job (one dataset at a time). This approach:
+- Eliminates resource contention (each script gets full CPU/memory access)
+- Better I/O performance (no disk contention)
+- Simpler debugging (clear which dataset is processing)
+- Lower memory pressure (one dataset loaded at a time)
 
-**Resources:** 32GB RAM (to accommodate 3 parallel processes), 16 CPUs, 8 hours
+**Resources:** 32GB RAM, 16 CPUs, 8 hours
 
 #### 02_create_data.sh - Dataset Creation
 
