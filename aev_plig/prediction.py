@@ -340,7 +340,7 @@ class Predictor:
             with torch.no_grad():
                 for data in loader:
                     data = data.to(self.device)
-                    output = model(data)
+                    output = model.predict(data)
                     total_preds = torch.cat((total_preds, output), 0)
                     total_graph_ids = torch.cat((total_graph_ids, data.y.view(-1, 1)), 0)
 

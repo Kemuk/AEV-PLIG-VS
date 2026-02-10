@@ -16,7 +16,7 @@ import warnings
 
 from aev_plig.prediction import Validator, GraphProcessor, Predictor
 from aev_plig.datasets import GraphDatasetPredict
-from aev_plig.models import get_model
+from aev_plig.models import MODEL_REGISTRY
 from aev_plig.config import Config
 import numpy as np
 
@@ -29,6 +29,8 @@ warnings.filterwarnings("ignore", message="Dependency not satisfied, torchani.da
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Make predictions on protein-ligand complexes')
+    parser.add_argument('--model', type=str, default=Config.MODEL_NAME,
+                        help='Model architecture name')
     parser.add_argument('--trained_model_name', type=str,
                         default='20231116-181233_model_GATv2Net_pdbbind_core',
                         help='Trained model name (without extension)')
@@ -174,7 +176,7 @@ def main():
 
     # Create predictor
     predictor = Predictor(
-        model_class=get_model('GATv2Net'),
+        model_class=MODEL_REGISTRY[config.model],
         model_paths=model_paths,
         scaler_path=scaler_path,
         device=config.device,

@@ -65,7 +65,10 @@ class Config:
     # Bond types for edge features (RDKit bond type codes)
     BOND_TYPES = [1, 12, 2, 3]  # SINGLE=1, AROMATIC=12, DOUBLE=2, TRIPLE=3
 
-    # ==================== Model Architecture (GATv2Net) ====================
+    # ==================== Model ====================
+    MODEL_NAME = "GATv2Net"
+
+    # Architecture
     HIDDEN_DIM = 256
     NUM_GNN_LAYERS = 5
     NUM_ATTENTION_HEADS = 3

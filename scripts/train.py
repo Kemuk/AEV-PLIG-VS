@@ -22,7 +22,7 @@ from aev_plig.config import Config
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Train GNN model for binding affinity prediction')
-    parser.add_argument('--model', type=str, default='GATv2Net', help='Model name')
+    parser.add_argument('--model', type=str, default=Config.MODEL_NAME, help='Model name')
     parser.add_argument('--dataset', type=str, default='pdbbind_U_bindingnet_ligsim90', help='Dataset name')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
     parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
