@@ -1,6 +1,22 @@
 # AEV-PLIG Development Plan
 
-## 🎯 Priority: Results Processing & Visualization System
+## 🚀 Current Priority: Parallel Ensemble Training
+
+**Status:** Planning complete - Ready for implementation
+
+**Goal:** Replace sequential ensemble training with parallel GPU jobs for 10× speedup.
+
+**See:** [PARALLEL_TRAINING_PLAN.md](PARALLEL_TRAINING_PLAN.md) for detailed implementation plan
+
+**Quick Summary:**
+- Current: 1 job trains 10 models sequentially (~40 hours)
+- Target: 10 jobs train 10 models in parallel (~4 hours with 10 GPUs)
+- Test mode: `./slurm/submit_training.sh --test` (devel partition, 2 epochs, 3 seeds)
+- Production: `./slurm/submit_training.sh` (all seeds from config)
+
+---
+
+## 🎯 Next Priority: Results Processing & Visualization System
 
 **Status:** Planning phase (to be implemented after pipeline runs successfully)
 
