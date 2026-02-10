@@ -42,6 +42,7 @@ export PYTHONNOUSERSITE=1
 # Activate conda environment and ensure its binaries are on PATH
 CONDA_ENV="$DATA/envs/aev-plig"
 export PATH="$CONDA_ENV/bin:$PATH"
+export LD_LIBRARY_PATH="$CONDA_ENV/lib:${LD_LIBRARY_PATH:-}"
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
