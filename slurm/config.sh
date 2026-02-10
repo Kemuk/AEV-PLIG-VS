@@ -34,8 +34,10 @@ LOG_DIR="$PROJECT_ROOT/logs"
 
 # ======================== Environment Setup ========================
 module load Anaconda3
-module load Boost/1.77.0-GCC-11.2.0
 module load CUDA
+
+# Isolate conda env from user-site packages (~/.local)
+export PYTHONNOUSERSITE=1
 
 # Activate conda environment and ensure its binaries are on PATH
 CONDA_ENV="$DATA/envs/aev-plig"

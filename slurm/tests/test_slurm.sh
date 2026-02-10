@@ -17,19 +17,19 @@ echo "Submitting test jobs to devel partition (10 min limit)..."
 echo "NOTE: Jobs are expected to timeout. This tests submission only."
 echo ""
 
-J1=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES "$JOBS_DIR/01_generate_graphs.sh")
+J1=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES "$JOBS_DIR/01_generate_graphs.sh" | cut -d';' -f1)
 echo "  01_generate_graphs: $J1"
 
-J2=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES --dependency=afterok:"$J1" "$JOBS_DIR/02_create_data.sh")
+J2=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES --dependency=afterok:"$J1" "$JOBS_DIR/02_create_data.sh" | cut -d';' -f1)
 echo "  02_create_data:     $J2 (after $J1)"
 
-J3=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES --gres=gpu:1 --dependency=afterok:"$J2" "$JOBS_DIR/03_train.sh")
+J3=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES --gres=gpu:1 --dependency=afterok:"$J2" "$JOBS_DIR/03_train.sh" | cut -d';' -f1)
 echo "  03_train:           $J3 (after $J2)"
 
 # For predict, provide a dummy model name — it will fail but tests submission
 J4=$(sbatch --cluster=htc --parsable $DEVEL_OVERRIDES --gres=gpu:1 \
     --export=ALL,TRAINED_MODEL_NAME="test_dummy",PREDICT_CSV="data/example_dataset.csv",PREDICT_NAME="test_devel" \
-    --dependency=afterok:"$J3" "$JOBS_DIR/04_predict.sh")
+    --dependency=afterok:"$J3" "$JOBS_DIR/04_predict.sh" | cut -d';' -f1)
 echo "  04_predict:         $J4 (after $J3)"
 
 echo ""

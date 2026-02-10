@@ -23,7 +23,7 @@ echo "  Output:  $PREDICT_NAME"
 
 J1=$(sbatch --cluster=htc --parsable \
     --export=ALL,TRAINED_MODEL_NAME="$TRAINED_MODEL_NAME",PREDICT_CSV="$PREDICT_CSV",PREDICT_NAME="$PREDICT_NAME" \
-    "$SCRIPT_DIR/jobs/04_predict.sh")
+    "$SCRIPT_DIR/jobs/04_predict.sh" | cut -d';' -f1)
 
 echo "  04_predict: $J1"
 echo ""
