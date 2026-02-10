@@ -35,6 +35,170 @@ Current phase: HPC workflow implementation
   - Requires: Conditional job submission logic in submission script
   - Status: Planned but not critical, adds minimal technical debt
 
+### Elegant Step Selection System — MEDIUM PRIORITY
+
+**Concept:** Array-based job selection with flexible step specification
+
+**Design Goals:**
+- Run all steps by default (except predict which needs model name)
+- Allow running specific steps via simple numeric syntax
+- Minimize code duplication (single array of job definitions)
+- Handle cross-cluster dependencies automatically
+- Robust error handling and validation
+
+**Usage Examples:**
+```bash
+# Default: run all steps (1,2,3) - skip predict by default
+./slurm/submit_training.sh
+
+# Run specific steps (comma-separated)
+./slurm/submit_training.sh 2,3      # data + train only
+
+# Run single step
+./slurm/submit_training.sh 2        # data only
+
+# Run range of steps
+./slurm/submit_training.sh 1-3      # graphs + data + train
+
+# Mixed format
+./slurm/submit_training.sh 1,3-4    # graphs, train, predict
+```
+
+**Implementation Design:**
+
+```bash
+#!/bin/bash
+# Job definitions array
+declare -a JOBS=(
+    "01_generate_graphs"
+    "02_create_data"
+    "03_train"
+    "04_predict"
+)
+
+# Cluster assignments for each job
+declare -a CLUSTERS=(
+    "arc"    # Job 1: graphs on arc
+    "htc"    # Job 2: data on htc
+    "htc"    # Job 3: train on htc
+    "htc"    # Job 4: predict on htc
+)
+
+# Default steps (exclude predict by default)
+DEFAULT_STEPS="1,2,3"
+
+# Parse argument (default or user-specified)
+STEPS_TO_RUN="${1:-$DEFAULT_STEPS}"
+
+# Function: parse_steps() - Convert input to array of step numbers
+#   Input: "2,3" or "1-3" or "2" or "1,3-4"
+#   Output: Array like (2 3) or (1 2 3)
+#   Handles: single, comma-separated, ranges, mixed
+
+# Function: validate_steps() - Ensure steps are valid
+#   Check: steps are numbers, in range [1,4], no duplicates
+
+# Main loop: iterate through requested steps
+for step in "${steps_array[@]}"; do
+    # Get job and cluster for this step
+    idx=$((step - 1))
+    job="${JOBS[$idx]}"
+    cluster="${CLUSTERS[$idx]}"
+    
+    # Determine dependency handling
+    if [[ -z "$prev_job" ]]; then
+        # First job: no dependency
+        submit_command="sbatch --cluster=$cluster --parsable jobs/${job}.sh"
+    elif [[ "$cluster" == "$prev_cluster" ]]; then
+        # Same cluster: use native SLURM dependency
+        submit_command="sbatch --cluster=$cluster --dependency=afterok:$prev_job --parsable jobs/${job}.sh"
+    else
+        # Different cluster: poll and wait for previous job
+        wait_for_job "$prev_cluster" "$prev_job" || exit 1
+        submit_command="sbatch --cluster=$cluster --parsable jobs/${job}.sh"
+    fi
+    
+    # Submit job
+    current_job=$(eval "$submit_command" | cut -d';' -f1)
+    echo "  ${job}: $current_job ($cluster)"
+    
+    # Track for next iteration
+    prev_job=$current_job
+    prev_cluster=$cluster
+done
+```
+
+**Testing Strategy:**
+
+1. **Unit Tests for Parsing:**
+   - `test_parse_single`: "2" → [2]
+   - `test_parse_list`: "1,3" → [1,3]
+   - `test_parse_range`: "1-3" → [1,2,3]
+   - `test_parse_mixed`: "1,3-4" → [1,3,4]
+   - `test_parse_default`: "" → [1,2,3]
+
+2. **Validation Tests:**
+   - `test_invalid_number`: "5" → error (out of range)
+   - `test_invalid_format`: "abc" → error
+   - `test_invalid_range`: "3-1" → error (descending)
+   - `test_duplicate`: "1,1,2" → [1,2] (deduplicated)
+
+3. **Integration Tests:**
+   - Test each step individually: 1, 2, 3, 4
+   - Test pairs: 1,2 | 2,3 | 3,4
+   - Test full: 1,2,3,4
+   - Test cross-cluster: 1,2 (arc→htc transition)
+
+4. **Dry-Run Mode:**
+   ```bash
+   DRY_RUN=1 ./slurm/submit_training.sh 2,3
+   # Should print what would be submitted without actually submitting
+   ```
+
+5. **Test Script Structure:**
+   ```bash
+   # tests/test_step_selection.sh
+   source ../slurm/submit_training.sh  # Source functions only
+   
+   test_parse_single() {
+       result=$(parse_steps "2")
+       expected="2"
+       assert_equal "$result" "$expected"
+   }
+   
+   # Run all tests
+   run_tests
+   ```
+
+**Edge Cases to Handle:**
+- Empty input: Use default
+- Out of range: Error with helpful message
+- Invalid format: Error with usage example
+- Zero or negative: Error
+- Non-numeric: Error
+- Spaces in input: Strip and parse
+- Step 4 (predict) without model: Warn but allow (will fail naturally)
+
+**Benefits:**
+- ✅ DRY principle: single array defines all jobs
+- ✅ Flexible: supports many use cases with simple syntax
+- ✅ Maintainable: adding jobs just extends array
+- ✅ Robust: comprehensive validation and testing
+- ✅ Clear: usage is intuitive (numeric steps)
+- ✅ Handles cross-cluster dependencies automatically
+
+**Implementation Checklist (when ready):**
+- [ ] Create `parse_steps()` function with full parsing logic
+- [ ] Create `validate_steps()` function
+- [ ] Add job arrays (JOBS, CLUSTERS)
+- [ ] Modify main loop to use parsed steps
+- [ ] Add dry-run mode
+- [ ] Create test suite
+- [ ] Update documentation
+- [ ] Test on actual cluster
+
+**Status:** Designed and ready for implementation when needed
+
 ---
 
 ## SLURM HPC Workflow
