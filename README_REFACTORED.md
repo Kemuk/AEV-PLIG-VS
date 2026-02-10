@@ -100,7 +100,7 @@ python scripts/train.py \
 
 ```bash
 python scripts/predict.py \
-    --trained_model_name 20231116-181233_model_GATv2Net_pdbbind_core \
+    --trained_model_name model_GATv2Net_ligsim90_fep_benchmark \
     --dataset_csv data/example_dataset.csv \
     --data_name example \
     --num_workers 8
