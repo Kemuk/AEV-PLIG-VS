@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=aev-graphs
-#SBATCH --cluster=htc
+#SBATCH --cluster=arc
 #SBATCH --partition=short
 #SBATCH --time=08:00:00
 #SBATCH --mem=32GB
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=16
 #SBATCH --output=logs/graphs_%j.out
 #SBATCH --error=logs/graphs_%j.err
 # =============================================================================
@@ -12,7 +12,7 @@
 # Each script reads structures from data/ and writes a .pickle file.
 # =============================================================================
 
-source "$(dirname "$0")/../config.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
 
 echo "Starting graph generation for 3 datasets in parallel..."
 

@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument('--model', type=str, default=Config.MODEL_NAME,
                         help='Model architecture name')
     parser.add_argument('--trained_model_name', type=str,
-                        default='20231116-181233_model_GATv2Net_pdbbind_core',
+                        default='model_GATv2Net_ligsim90_fep_benchmark',
                         help='Trained model name (without extension)')
     parser.add_argument('--dataset_csv', type=str, default='data/example_dataset.csv',
                         help='Path to dataset CSV file')

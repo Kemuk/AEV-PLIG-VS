@@ -12,7 +12,7 @@
 # Combines pdbbind, bindingnet, and bindingdb into train/valid/test splits.
 # =============================================================================
 
-source "$(dirname "$0")/../config.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
 
 echo "Creating PyTorch datasets..."
 python create_pytorch_data.py

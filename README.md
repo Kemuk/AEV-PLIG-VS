@@ -9,6 +9,27 @@ In this repo we demonstrate how to use AEV-PLIG for predictions and how to train
 
 - [Installation guide](#installation-guide)
 - [Demo](#demo)
+- [HPC/SLURM Workflow](#hpcslurm-workflow)
+
+## HPC/SLURM Workflow
+
+**For users on HPC clusters with SLURM:** A complete automated workflow is available that handles graph generation, dataset creation, training, and prediction with proper job dependencies and parallel processing.
+
+See **[slurm/README.md](slurm/README.md)** for:
+- Quick start guide for running on SLURM
+- Pipeline architecture and job flow
+- Details on parallel graph generation (3 datasets processed concurrently)
+- Monitoring and troubleshooting
+- Testing and validation
+
+Quick example:
+```bash
+# Submit training pipeline (graphs → data → train)
+./slurm/submit_training.sh
+
+# Monitor jobs
+squeue -u $USER --cluster=htc
+```
 
 ## Installation guide
 AEV-PLIG has been tested on the following systems:
