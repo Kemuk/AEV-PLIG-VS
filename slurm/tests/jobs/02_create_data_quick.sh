@@ -10,7 +10,8 @@
 # =============================================================================
 # Quick test: Dry run using pre-existing TEST split subset.
 #
-# Runs all 3 optimization phases with ~5-10K graphs (test split only):
+# Runs create_pytorch_data.py in QUICK_TEST mode (test split only).
+# Tests all 3 optimization phases with ~5-10K graphs:
 #   Phase 1: Parallel pickle loading (all 3 files)
 #   Phase 2: Polars CSV processing (test split only)
 #   Phase 3: Parallel graph processing (test subset only)
@@ -35,7 +36,10 @@ echo ""
 
 mkdir -p logs
 
-python create_pytorch_data_quick.py
+# Enable quick test mode via environment variable
+export QUICK_TEST=1
+
+python create_pytorch_data.py
 
 EXIT_CODE=$?
 
