@@ -3,72 +3,187 @@ Create PyTorch Geometric datasets from graph pickle files.
 
 This script combines graphs from multiple datasets (PDBbind, BindingNet, BindingDB)
 and creates train/valid/test splits for model training.
+
+Optimizations:
+- Parallel pickle loading (ThreadPoolExecutor)
+- Polars instead of pandas (5-10x faster)
+- Progress bars (tqdm) for visibility
 """
 
-import pandas as pd
+import polars as pl
 import pickle
+from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
 from aev_plig.datasets import GraphDataset
 
-"""
-Load graphs
-"""
-print("loading graph from pickle file for pdbbind2020")
-with open("data/pdbbind.pickle", 'rb') as handle:
-    pdbbind_graphs = pickle.load(handle)
 
-print("loading graph from pickle file for BindingNet")
-with open("data/bindingnet.pickle", 'rb') as handle:
-    bindingnet_graphs = pickle.load(handle)
-
-print("loading graph from pickle file for BindingDB")
-with open("data/bindingdb.pickle", 'rb') as handle:
-    bindingdb_graphs = pickle.load(handle)
-
-graphs_dict = {**pdbbind_graphs, **bindingnet_graphs, **bindingdb_graphs}
+def load_pickle(path):
+    """Load a pickle file (for parallel execution)."""
+    print(f"Loading {path}...")
+    with open(path, 'rb') as handle:
+        return pickle.load(handle)
 
 
-"""
-Generate data for enriched training for <0.9 Tanimoto to the FEP benchmark
-"""
-pdbbind = pd.read_csv("data/pdbbind_processed.csv", index_col=0)
-pdbbind = pdbbind[['PDB_code','-logKd/Ki','split_core','max_tanimoto_fep_benchmark']]
-pdbbind = pdbbind.rename(columns={'PDB_code':'unique_id', 'split_core':'split', '-logKd/Ki':'pK'})
-pdbbind = pdbbind[pdbbind["max_tanimoto_fep_benchmark"] < 0.9]
-pdbbind = pdbbind[['unique_id','pK','split']]
+def main():
+    """
+    Load graphs and create PyTorch datasets.
+    """
 
-bindingnet = pd.read_csv("data/bindingnet_processed.csv", index_col=0)
-bindingnet = bindingnet.rename(columns={'-logAffi': 'pK','unique_identify':'unique_id'})[['unique_id','pK','max_tanimoto_fep_benchmark']]
-bindingnet['split'] = 'train'
-bindingnet = bindingnet[bindingnet["max_tanimoto_fep_benchmark"] < 0.9]
-bindingnet = bindingnet[['unique_id','pK','split']]
+    # =========================================================================
+    # Load graphs in parallel (Phase 1)
+    # =========================================================================
+    print("="*60)
+    print("Loading graph pickle files in parallel...")
+    print("="*60)
 
-bindingdb = pd.read_csv("data/bindingdb_processed.csv", index_col=0)
-bindingdb = bindingdb[['unique_id','pK','max_tanimoto_fep_benchmark']]
-bindingdb['split'] = 'train'
-bindingdb = bindingdb[bindingdb["max_tanimoto_fep_benchmark"] < 0.9]
-bindingdb = bindingdb[['unique_id','pK','split']]
+    pickle_files = [
+        "data/pdbbind.pickle",
+        "data/bindingnet.pickle",
+        "data/bindingdb.pickle"
+    ]
 
-# combine pdbbind2020, bindingnet, and bindingdb index sets
-data = pd.concat([pdbbind, bindingnet, bindingdb], ignore_index=True)
-print(data[['split']].value_counts())
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(tqdm(
+            executor.map(load_pickle, pickle_files),
+            total=len(pickle_files),
+            desc="Loading pickles"
+        ))
 
-dataset = 'pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark'
+    pdbbind_graphs, bindingnet_graphs, bindingdb_graphs = results
 
-df = data[data['split'] == 'train']
-train_ids, train_y = list(df['unique_id']), list(df['pK'])
+    # Merge all graphs into single dictionary
+    print(f"\nMerging {len(pdbbind_graphs)} + {len(bindingnet_graphs)} + {len(bindingdb_graphs)} graphs...")
+    graphs_dict = {**pdbbind_graphs, **bindingnet_graphs, **bindingdb_graphs}
+    print(f"✓ Total graphs: {len(graphs_dict)}\n")
 
-df = data[data['split'] == 'valid']
-valid_ids, valid_y = list(df['unique_id']), list(df['pK'])
+    # =========================================================================
+    # Process CSV files with Polars (Phase 2)
+    # =========================================================================
+    print("="*60)
+    print("Processing CSV files with Polars...")
+    print("="*60)
 
-df = data[data['split'] == 'test']
-test_ids, test_y = list(df['unique_id']), list(df['pK'])
+    # Load and filter PDBbind (lazy evaluation for speed)
+    print("Processing pdbbind_processed.csv...")
+    pdbbind = (
+        pl.scan_csv("data/pdbbind_processed.csv")
+        .select([
+            pl.col("PDB_code").alias("unique_id"),
+            pl.col("-logKd/Ki").alias("pK"),
+            pl.col("split_core").alias("split"),
+            pl.col("max_tanimoto_fep_benchmark")
+        ])
+        .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
+        .select(["unique_id", "pK", "split"])
+        .collect()
+    )
+    print(f"  → {len(pdbbind)} entries after filtering")
 
-# make data PyTorch Geometric ready
-print('preparing ', dataset + '_train.pt in pytorch format!')
-train_data = GraphDataset(root='data', dataset=dataset + '_train', ids=train_ids, y=train_y, graphs_dict=graphs_dict)
+    # Load and filter BindingNet
+    print("Processing bindingnet_processed.csv...")
+    bindingnet = (
+        pl.scan_csv("data/bindingnet_processed.csv")
+        .select([
+            pl.col("unique_identify").alias("unique_id"),
+            pl.col("-logAffi").alias("pK"),
+            pl.col("max_tanimoto_fep_benchmark")
+        ])
+        .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
+        .with_columns(pl.lit("train").alias("split"))
+        .select(["unique_id", "pK", "split"])
+        .collect()
+    )
+    print(f"  → {len(bindingnet)} entries after filtering")
 
-print('preparing ', dataset + '_valid.pt in pytorch format!')
-valid_data = GraphDataset(root='data', dataset=dataset + '_valid', ids=valid_ids, y=valid_y, graphs_dict=graphs_dict)
+    # Load and filter BindingDB
+    print("Processing bindingdb_processed.csv...")
+    bindingdb = (
+        pl.scan_csv("data/bindingdb_processed.csv")
+        .select([
+            pl.col("unique_id"),
+            pl.col("pK"),
+            pl.col("max_tanimoto_fep_benchmark")
+        ])
+        .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
+        .with_columns(pl.lit("train").alias("split"))
+        .select(["unique_id", "pK", "split"])
+        .collect()
+    )
+    print(f"  → {len(bindingdb)} entries after filtering")
 
-print('preparing ', dataset + '_test.pt in pytorch format!')
-test_data = GraphDataset(root='data', dataset=dataset + '_test', ids=test_ids, y=test_y, graphs_dict=graphs_dict)
+    # Combine all datasets
+    data = pl.concat([pdbbind, bindingnet, bindingdb])
+    print(f"\n✓ Total combined entries: {len(data)}")
+    print("\nSplit distribution:")
+    print(data.group_by("split").agg(pl.count()).sort("split"))
+
+    dataset = 'pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark'
+
+    # =========================================================================
+    # Create PyTorch Geometric datasets (Phase 3 optimizations in datasets.py)
+    # =========================================================================
+    print("\n" + "="*60)
+    print("Creating PyTorch Geometric datasets...")
+    print("="*60)
+
+    # Extract train/valid/test splits
+    train_df = data.filter(pl.col("split") == "train")
+    train_ids = train_df["unique_id"].to_list()
+    train_y = train_df["pK"].to_list()
+    print(f"\nTrain set: {len(train_ids)} samples")
+
+    valid_df = data.filter(pl.col("split") == "valid")
+    valid_ids = valid_df["unique_id"].to_list()
+    valid_y = valid_df["pK"].to_list()
+    print(f"Valid set: {len(valid_ids)} samples")
+
+    test_df = data.filter(pl.col("split") == "test")
+    test_ids = test_df["unique_id"].to_list()
+    test_y = test_df["pK"].to_list()
+    print(f"Test set:  {len(test_ids)} samples")
+
+    # Create PyTorch Geometric datasets (with progress tracking)
+    print(f"\n{'='*60}")
+    print('Creating train dataset...')
+    print(f"{'='*60}")
+    train_data = GraphDataset(
+        root='data',
+        dataset=dataset + '_train',
+        ids=train_ids,
+        y=train_y,
+        graphs_dict=graphs_dict
+    )
+
+    print(f"\n{'='*60}")
+    print('Creating validation dataset...')
+    print(f"{'='*60}")
+    valid_data = GraphDataset(
+        root='data',
+        dataset=dataset + '_valid',
+        ids=valid_ids,
+        y=valid_y,
+        graphs_dict=graphs_dict
+    )
+
+    print(f"\n{'='*60}")
+    print('Creating test dataset...')
+    print(f"{'='*60}")
+    test_data = GraphDataset(
+        root='data',
+        dataset=dataset + '_test',
+        ids=test_ids,
+        y=test_y,
+        graphs_dict=graphs_dict
+    )
+
+    print("\n" + "="*60)
+    print("✓ All datasets created successfully!")
+    print("="*60)
+    print(f"Train: {len(train_data)} graphs")
+    print(f"Valid: {len(valid_data)} graphs")
+    print(f"Test:  {len(test_data)} graphs")
+    print("="*60)
+
+
+if __name__ == "__main__":
+    main()

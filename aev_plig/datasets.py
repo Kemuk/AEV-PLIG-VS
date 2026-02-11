@@ -3,6 +3,10 @@ PyTorch Geometric dataset classes for protein-ligand graphs.
 
 This module provides dataset classes for loading and processing molecular graphs
 for use with PyTorch Geometric.
+
+Optimizations:
+- Parallel graph processing with multiprocessing
+- Progress bars with tqdm
 """
 
 import os
@@ -12,6 +16,8 @@ import numpy as np
 from torch_geometric.data import InMemoryDataset, Data
 import torch
 from sklearn.preprocessing import StandardScaler
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
 
 
 def init_weights(layer):
@@ -29,6 +35,70 @@ def init_weights(layer):
         if layer.bias is not None:
             torch.nn.init.zeros_(layer.bias)
 
+
+# =============================================================================
+# Parallel processing helper functions (module-level for picklability)
+# =============================================================================
+
+def _process_single_graph_train(args):
+    """
+    Process a single graph for training (with labels).
+
+    Args:
+        args: Tuple of (pdbcode, label, graphs_dict)
+
+    Returns:
+        Data object or None if graph not found
+    """
+    pdbcode, label, graphs_dict = args
+
+    try:
+        c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
+
+        data_point = Data(
+            x=torch.Tensor(np.array(features)),
+            edge_index=torch.LongTensor(np.array(edge_index)).T,
+            edge_attr=torch.Tensor(np.array(edge_features)),
+            y=torch.FloatTensor(np.array([label]))
+        )
+        return data_point
+
+    except KeyError:
+        # Return None for missing entries (will be filtered out)
+        return None
+
+
+def _process_single_graph_predict(args):
+    """
+    Process a single graph for prediction (with graph IDs).
+
+    Args:
+        args: Tuple of (pdbcode, graph_id, graphs_dict)
+
+    Returns:
+        Data object or None if graph not found
+    """
+    pdbcode, graph_id, graphs_dict = args
+
+    try:
+        c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
+
+        data_point = Data(
+            x=torch.Tensor(np.array(features)),
+            edge_index=torch.LongTensor(np.array(edge_index)).T,
+            edge_attr=torch.Tensor(np.array(edge_features)),
+            y=torch.IntTensor(np.array([graph_id]))
+        )
+        return data_point
+
+    except KeyError:
+        # Return None for missing entries (will be filtered out)
+        return None
+
+
+# =============================================================================
+# Dataset Classes
+# =============================================================================
 
 class GraphDataset(InMemoryDataset):
     """
@@ -93,7 +163,7 @@ class GraphDataset(InMemoryDataset):
 
     def process(self, ids, y, graphs_dict):
         """
-        Process molecular graphs and create PyTorch Data objects.
+        Process molecular graphs and create PyTorch Data objects (parallelized).
 
         Args:
             ids: List of molecule IDs
@@ -101,33 +171,31 @@ class GraphDataset(InMemoryDataset):
             graphs_dict: Dictionary mapping IDs to (c_size, features, edge_index, edge_features)
         """
         assert (len(ids) == len(y)), 'Number of datapoints and labels must be the same'
-        data_list = []
+
         data_len = len(ids)
-        skipped_count = 0
+        print(f"Processing {data_len} graphs in parallel using {cpu_count()} CPU cores...")
 
-        for i in range(data_len):
-            pdbcode = ids[i]
-            label = y[i]
+        # Prepare arguments for parallel processing
+        args_list = [(ids[i], y[i], graphs_dict) for i in range(data_len)]
 
-            try:
-                c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
-            except KeyError:
-                print(f"⚠️  Skipping {pdbcode}: not found in graphs_dict")
-                skipped_count += 1
-                continue
+        # Process graphs in parallel with progress bar
+        with Pool(cpu_count()) as pool:
+            data_list = list(tqdm(
+                pool.imap(_process_single_graph_train, args_list, chunksize=100),
+                total=data_len,
+                desc="Processing graphs",
+                unit="graphs"
+            ))
 
-            data_point = Data(
-                x=torch.Tensor(np.array(features)),
-                edge_index=torch.LongTensor(np.array(edge_index)).T,
-                edge_attr=torch.Tensor(np.array(edge_features)),
-                y=torch.FloatTensor(np.array([label]))
-            )
-
-            data_list.append(data_point)
+        # Filter out None values (skipped entries)
+        original_count = len(data_list)
+        data_list = [d for d in data_list if d is not None]
+        skipped_count = original_count - len(data_list)
 
         if skipped_count > 0:
             print(f"⚠️  Skipped {skipped_count}/{data_len} entries due to missing graphs")
-        print('Graph construction done. Saving to file.')
+
+        print(f'Graph construction done. Saving {len(data_list)} graphs to file.')
         self.save(data_list, self.processed_paths[0])
 
 
@@ -181,7 +249,7 @@ class GraphDatasetPredict(InMemoryDataset):
 
     def process(self, ids, graph_ids, graphs_dict):
         """
-        Process molecular graphs for prediction.
+        Process molecular graphs for prediction (parallelized).
 
         Args:
             ids: List of molecule IDs
@@ -189,31 +257,29 @@ class GraphDatasetPredict(InMemoryDataset):
             graphs_dict: Dictionary mapping IDs to (c_size, features, edge_index, edge_features)
         """
         assert (len(ids) == len(graph_ids)), 'Number of datapoints and graph IDs must be the same'
-        data_list = []
+
         data_len = len(ids)
-        skipped_count = 0
+        print(f"Processing {data_len} graphs in parallel using {cpu_count()} CPU cores...")
 
-        for i in range(data_len):
-            pdbcode = ids[i]
-            graph_id = graph_ids[i]
+        # Prepare arguments for parallel processing
+        args_list = [(ids[i], graph_ids[i], graphs_dict) for i in range(data_len)]
 
-            try:
-                c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
-            except KeyError:
-                print(f"⚠️  Skipping {pdbcode}: not found in graphs_dict")
-                skipped_count += 1
-                continue
+        # Process graphs in parallel with progress bar
+        with Pool(cpu_count()) as pool:
+            data_list = list(tqdm(
+                pool.imap(_process_single_graph_predict, args_list, chunksize=100),
+                total=data_len,
+                desc="Processing graphs",
+                unit="graphs"
+            ))
 
-            data_point = Data(
-                x=torch.Tensor(np.array(features)),
-                edge_index=torch.LongTensor(np.array(edge_index)).T,
-                edge_attr=torch.Tensor(np.array(edge_features)),
-                y=torch.IntTensor(np.array([graph_id]))
-            )
-
-            data_list.append(data_point)
+        # Filter out None values (skipped entries)
+        original_count = len(data_list)
+        data_list = [d for d in data_list if d is not None]
+        skipped_count = original_count - len(data_list)
 
         if skipped_count > 0:
             print(f"⚠️  Skipped {skipped_count}/{data_len} entries due to missing graphs")
-        print('Graph construction done. Saving to file.')
+
+        print(f'Graph construction done. Saving {len(data_list)} graphs to file.')
         self.save(data_list, self.processed_paths[0])
