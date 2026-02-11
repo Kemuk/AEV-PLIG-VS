@@ -103,11 +103,18 @@ class GraphDataset(InMemoryDataset):
         assert (len(ids) == len(y)), 'Number of datapoints and labels must be the same'
         data_list = []
         data_len = len(ids)
+        skipped_count = 0
 
         for i in range(data_len):
             pdbcode = ids[i]
             label = y[i]
-            c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
+
+            try:
+                c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
+            except KeyError:
+                print(f"⚠️  Skipping {pdbcode}: not found in graphs_dict")
+                skipped_count += 1
+                continue
 
             data_point = Data(
                 x=torch.Tensor(np.array(features)),
@@ -118,6 +125,8 @@ class GraphDataset(InMemoryDataset):
 
             data_list.append(data_point)
 
+        if skipped_count > 0:
+            print(f"⚠️  Skipped {skipped_count}/{data_len} entries due to missing graphs")
         print('Graph construction done. Saving to file.')
         self.save(data_list, self.processed_paths[0])
 
@@ -182,11 +191,18 @@ class GraphDatasetPredict(InMemoryDataset):
         assert (len(ids) == len(graph_ids)), 'Number of datapoints and graph IDs must be the same'
         data_list = []
         data_len = len(ids)
+        skipped_count = 0
 
         for i in range(data_len):
             pdbcode = ids[i]
             graph_id = graph_ids[i]
-            c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
+
+            try:
+                c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
+            except KeyError:
+                print(f"⚠️  Skipping {pdbcode}: not found in graphs_dict")
+                skipped_count += 1
+                continue
 
             data_point = Data(
                 x=torch.Tensor(np.array(features)),
@@ -197,5 +213,7 @@ class GraphDatasetPredict(InMemoryDataset):
 
             data_list.append(data_point)
 
+        if skipped_count > 0:
+            print(f"⚠️  Skipped {skipped_count}/{data_len} entries due to missing graphs")
         print('Graph construction done. Saving to file.')
         self.save(data_list, self.processed_paths[0])

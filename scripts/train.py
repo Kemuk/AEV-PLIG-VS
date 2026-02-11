@@ -59,9 +59,9 @@ def train_ensemble(args):
         ensemble_seeds = Config.ENSEMBLE_SEEDS
         print(f"\nEnsemble mode: training {len(ensemble_seeds)} models")
 
-    # Setup output directory: models/{model}_{timestamp}/
+    # Setup output directory: output/trained_models/{model}_{timestamp}/
     timestamp = args.timestamp or time.strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join('models', f"{args.model}_{timestamp}")
+    output_dir = os.path.join('output', 'trained_models', f"{args.model}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Output directory: {output_dir}")
