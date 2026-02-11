@@ -113,7 +113,7 @@ def main():
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .filter(pl.col("split_core") == "test")  # TEST ONLY
+            .filter(pl.col("split") == "test")  # TEST ONLY (use 'split' after aliasing)
             .select(["unique_id", "pK", "split"])
             .collect()
         )
