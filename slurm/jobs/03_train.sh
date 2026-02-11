@@ -10,9 +10,10 @@
 #SBATCH --error=logs/train_%j.err
 #SBATCH --chdir=$DATA/AEV-PLIG-VS
 # =============================================================================
-# Step 3: Train model ensemble.
-# Trains all ensemble members (seeds defined in aev_plig/config.py).
-# All hyperparameters (lr, epochs, batch_size, etc.) use Python defaults.
+# Train model ensemble.
+#
+# Single-seed mode (parallel): Set SEED and TIMESTAMP env vars
+# Ensemble mode (sequential): Run without env vars (trains all seeds)
 # =============================================================================
 
 source slurm/config.sh
@@ -20,8 +21,21 @@ source slurm/config.sh
 echo "Training model: $MODEL_NAME"
 echo "Dataset: $DATASET_NAME"
 
-python scripts/train.py \
-    --model "$MODEL_NAME" \
-    --dataset "$DATASET_NAME"
+# Check if running in single-seed mode (parallel job)
+if [[ -n "${SEED:-}" ]]; then
+    echo "Single-seed mode: Seed $SEED, Timestamp $TIMESTAMP"
 
-echo "Training completed. Models saved to output/trained_models/"
+    python scripts/train.py \
+        --model "$MODEL_NAME" \
+        --dataset "$DATASET_NAME" \
+        --seed "$SEED" \
+        --timestamp "$TIMESTAMP"
+else
+    echo "Ensemble mode: training all seeds sequentially"
+
+    python scripts/train.py \
+        --model "$MODEL_NAME" \
+        --dataset "$DATASET_NAME"
+fi
+
+echo "Training completed. Models saved to models/"

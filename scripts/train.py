@@ -30,6 +30,13 @@ def parse_args():
     parser.add_argument('--head', type=int, default=3, help='Number of attention heads')
     parser.add_argument('--lr', type=float, default=0.00012291937615434127, help='Learning rate')
     parser.add_argument('--activation_function', type=str, default='leaky_relu', help='Activation function')
+
+    # Parallel training arguments
+    parser.add_argument('--seed', type=int, default=None,
+                       help='Train single model with this seed (for parallel jobs)')
+    parser.add_argument('--timestamp', type=str, default=None,
+                       help='Timestamp for output directory (shared across parallel jobs)')
+
     args = parser.parse_args()
     return args
 
@@ -39,9 +46,26 @@ def train_ensemble(args):
 
     print(f'Training {args.model} on {args.dataset} for {args.epochs} epochs')
 
-    # Setup directories
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    model_output_dir = Config.TRAINED_MODELS_DIR
+    # Validate seeds (check for duplicates)
+    Config.validate_ensemble_seeds()
+
+    # Determine training mode and seeds
+    if args.seed is not None:
+        # Single-seed mode (for parallel jobs)
+        ensemble_seeds = [args.seed]
+        print(f"\nSingle-seed mode: training seed {args.seed}")
+    else:
+        # Ensemble mode (train all seeds)
+        ensemble_seeds = Config.ENSEMBLE_SEEDS
+        print(f"\nEnsemble mode: training {len(ensemble_seeds)} models")
+
+    # Setup output directory: models/{model}_{timestamp}/
+    timestamp = args.timestamp or time.strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join('models', f"{args.model}_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"Output directory: {output_dir}")
+    print(f"Timestamp: {timestamp}\n")
 
     # Load datasets
     train_data = GraphDataset(root='data', dataset=args.dataset + '_train', y_scaler=None)
@@ -60,8 +84,6 @@ def train_ensemble(args):
     print(f'Device: {device}')
 
     # Train ensemble
-    ensemble_seeds = Config.ENSEMBLE_SEEDS
-
     for i, seed in enumerate(ensemble_seeds):
         print(f"\n{'='*60}")
         print(f"Training model {i+1}/{len(ensemble_seeds)} with seed {seed}")
@@ -95,10 +117,12 @@ def train_ensemble(args):
         )
 
         # Train model
-        model_file_name = f"{timestr}_model_{args.model}_{args.dataset}_{i}.model"
-        model_save_path = os.path.join(model_output_dir, model_file_name)
+        model_filename = f"model_seed_{seed}.model"
+        model_save_path = os.path.join(output_dir, model_filename)
 
         trainer.fit(n_epochs=args.epochs, model_save_path=model_save_path)
+
+        print(f"✓ Saved: {model_save_path}")
 
         # Load best model and evaluate on test set
         model.load_state_dict(torch.load(model_save_path))
@@ -107,30 +131,35 @@ def train_ensemble(args):
         if i == 0:
             df_test = pd.DataFrame(data=G_test, columns=['truth'])
 
-        df_test[f'preds_{i}'] = P_test
+        df_test[f'preds_{seed}'] = P_test
 
-    # Compute ensemble predictions
-    pred_cols = [c for c in df_test.columns if c.startswith('preds_')]
-    df_test['preds'] = df_test[pred_cols].mean(axis=1)
-
-    # Save scaler
-    scaler_file = f"{timestr}_model_{args.model}_{args.dataset}.pickle"
-    scaler_path = os.path.join(model_output_dir, scaler_file)
+    # Save scaler in the same directory
+    scaler_filename = f"scaler.pickle"
+    scaler_path = os.path.join(output_dir, scaler_filename)
     with open(scaler_path, 'wb') as f:
         pickle.dump(train_data.y_scaler, f)
 
-    # Compute ensemble metrics
-    test_preds = df_test['preds'].values
-    test_truth = df_test['truth'].values
-    test_ens_pc = pearson(test_truth, test_preds)
-    test_ens_rmse = rmse(test_truth, test_preds)
+    print(f"✓ Saved scaler: {scaler_path}")
 
-    print(f"\n{'='*60}")
-    print("ENSEMBLE TEST RESULTS")
-    print(f"{'='*60}")
-    print(f"Ensemble test Pearson correlation: {test_ens_pc:.4f}")
-    print(f"Ensemble test RMSE: {test_ens_rmse:.4f}")
-    print(f"{'='*60}\n")
+    # Compute ensemble predictions (only if training multiple seeds)
+    if len(ensemble_seeds) > 1:
+        pred_cols = [c for c in df_test.columns if c.startswith('preds_')]
+        df_test['preds'] = df_test[pred_cols].mean(axis=1)
+
+        # Compute ensemble metrics
+        test_preds = df_test['preds'].values
+        test_truth = df_test['truth'].values
+        test_ens_pc = pearson(test_truth, test_preds)
+        test_ens_rmse = rmse(test_truth, test_preds)
+
+        print(f"\n{'='*60}")
+        print("ENSEMBLE TEST RESULTS")
+        print(f"{'='*60}")
+        print(f"Ensemble test Pearson correlation: {test_ens_pc:.4f}")
+        print(f"Ensemble test RMSE: {test_ens_rmse:.4f}")
+        print(f"{'='*60}\n")
+    else:
+        print(f"\nSingle-seed mode: skipping ensemble metrics computation")
 
 
 def main():

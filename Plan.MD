@@ -1,19 +1,41 @@
 # AEV-PLIG Development Plan
 
-## 🚀 Current Priority: Parallel Ensemble Training
+## 🚀 Current Priority: Parallel Ensemble Training with Seed-Based Filenames
 
-**Status:** Planning complete - Ready for implementation
+**Status:** Implementation in progress
 
-**Goal:** Replace sequential ensemble training with parallel GPU jobs for 10× speedup.
+**Goal:** Replace sequential ensemble training with parallel GPU jobs for 10× speedup using robust seed-based filenames.
 
-**See:** [MINIMAL_PARALLEL_PLAN.md](MINIMAL_PARALLEL_PLAN.md) for implementation plan
+**See:** [MINIMAL_PARALLEL_PLAN.md](MINIMAL_PARALLEL_PLAN.md) for original implementation plan
 
 **Quick Summary:**
 - Current: 1 job trains 10 models sequentially (~40 hours)
 - Target: 10 jobs train 10 models in parallel (~4 hours with 10 GPUs)
-- Changes: 4 files, ~85 lines total (simple bash loop, no complex flags)
+- **Key Improvement:** Use seed in filename (`model_seed_100.model`) instead of index
+- **Organization:** Models grouped by family: `models/{model}_{timestamp}/model_seed_100.model`
+- **Validation:** Enforce no duplicate seeds in config
+- Changes: 4 files for training, updated tests, prediction/evaluation documentation
 - Test: `sbatch slurm/tests/jobs/03_train_quick.sh` (1 seed, 2 epochs, <10 min)
 - Production: `./slurm/submit_training.sh` (all seeds from config)
+
+### Architecture Changes
+
+**New Directory Structure:**
+```
+models/
+  GATv2Net_20250211_120000/
+    model_seed_100.model
+    model_seed_123.model
+    model_seed_15.model
+    ...
+```
+
+**Why Seed-Based Filenames?**
+- ✅ No index confusion or ordering bugs
+- ✅ Clear which seed → which model
+- ✅ Works with any custom seeds
+- ✅ Parallel-safe (seeds are unique)
+- ✅ Validates no duplicate seeds at startup
 
 ---
 
