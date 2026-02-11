@@ -45,27 +45,26 @@ def _process_single_graph_train(args):
     Process a single graph for training (with labels).
 
     Args:
-        args: Tuple of (pdbcode, label, graphs_dict)
+        args: Tuple of (label, graph_tuple) where graph_tuple is (c_size, features, edge_index, edge_features)
+              OR None if graph not found
 
     Returns:
         Data object or None if graph not found
     """
-    pdbcode, label, graphs_dict = args
+    label, graph_tuple = args
 
-    try:
-        c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
-
-        data_point = Data(
-            x=torch.Tensor(np.array(features)),
-            edge_index=torch.LongTensor(np.array(edge_index)).T,
-            edge_attr=torch.Tensor(np.array(edge_features)),
-            y=torch.FloatTensor(np.array([label]))
-        )
-        return data_point
-
-    except KeyError:
-        # Return None for missing entries (will be filtered out)
+    if graph_tuple is None:
         return None
+
+    c_size, features, edge_index, edge_features = graph_tuple
+
+    data_point = Data(
+        x=torch.Tensor(np.array(features)),
+        edge_index=torch.LongTensor(np.array(edge_index)).T,
+        edge_attr=torch.Tensor(np.array(edge_features)),
+        y=torch.FloatTensor(np.array([label]))
+    )
+    return data_point
 
 
 def _process_single_graph_predict(args):
@@ -73,27 +72,26 @@ def _process_single_graph_predict(args):
     Process a single graph for prediction (with graph IDs).
 
     Args:
-        args: Tuple of (pdbcode, graph_id, graphs_dict)
+        args: Tuple of (graph_id, graph_tuple) where graph_tuple is (c_size, features, edge_index, edge_features)
+              OR None if graph not found
 
     Returns:
         Data object or None if graph not found
     """
-    pdbcode, graph_id, graphs_dict = args
+    graph_id, graph_tuple = args
 
-    try:
-        c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
-
-        data_point = Data(
-            x=torch.Tensor(np.array(features)),
-            edge_index=torch.LongTensor(np.array(edge_index)).T,
-            edge_attr=torch.Tensor(np.array(edge_features)),
-            y=torch.IntTensor(np.array([graph_id]))
-        )
-        return data_point
-
-    except KeyError:
-        # Return None for missing entries (will be filtered out)
+    if graph_tuple is None:
         return None
+
+    c_size, features, edge_index, edge_features = graph_tuple
+
+    data_point = Data(
+        x=torch.Tensor(np.array(features)),
+        edge_index=torch.LongTensor(np.array(edge_index)).T,
+        edge_attr=torch.Tensor(np.array(edge_features)),
+        y=torch.IntTensor(np.array([graph_id]))
+    )
+    return data_point
 
 
 # =============================================================================
@@ -173,13 +171,26 @@ class GraphDataset(InMemoryDataset):
         assert (len(ids) == len(y)), 'Number of datapoints and labels must be the same'
 
         data_len = len(ids)
-        print(f"Processing {data_len} graphs in parallel using {cpu_count()} CPU cores...")
 
-        # Prepare arguments for parallel processing
-        args_list = [(ids[i], y[i], graphs_dict) for i in range(data_len)]
+        # Limit workers to prevent memory exhaustion (each worker needs memory for graph processing)
+        # Use at most 16 workers, or fewer if less CPUs available
+        max_workers = min(cpu_count(), 16)
+        print(f"Processing {data_len} graphs in parallel using {max_workers} workers...")
+
+        # PRE-LOOKUP: Get graph data for each ID (or None if missing)
+        # This way we only pass small tuples to workers, not the entire graphs_dict
+        print("Looking up graph data...")
+        args_list = [
+            (y[i], graphs_dict.get(ids[i], None))
+            for i in range(data_len)
+        ]
+
+        missing_count = sum(1 for _, g in args_list if g is None)
+        if missing_count > 0:
+            print(f"⚠️  {missing_count}/{data_len} graphs not found in graphs_dict")
 
         # Process graphs in parallel with progress bar
-        with Pool(cpu_count()) as pool:
+        with Pool(max_workers) as pool:
             data_list = list(tqdm(
                 pool.imap(_process_single_graph_train, args_list, chunksize=100),
                 total=data_len,
@@ -193,9 +204,11 @@ class GraphDataset(InMemoryDataset):
         skipped_count = original_count - len(data_list)
 
         if skipped_count > 0:
-            print(f"⚠️  Skipped {skipped_count}/{data_len} entries due to missing graphs")
+            print(f"✓ Processed {len(data_list)}/{data_len} graphs ({skipped_count} skipped)")
+        else:
+            print(f"✓ Processed all {len(data_list)} graphs successfully")
 
-        print(f'Graph construction done. Saving {len(data_list)} graphs to file.')
+        print(f'Saving {len(data_list)} graphs to file...')
         self.save(data_list, self.processed_paths[0])
 
 
@@ -259,13 +272,24 @@ class GraphDatasetPredict(InMemoryDataset):
         assert (len(ids) == len(graph_ids)), 'Number of datapoints and graph IDs must be the same'
 
         data_len = len(ids)
-        print(f"Processing {data_len} graphs in parallel using {cpu_count()} CPU cores...")
 
-        # Prepare arguments for parallel processing
-        args_list = [(ids[i], graph_ids[i], graphs_dict) for i in range(data_len)]
+        # Limit workers to prevent memory exhaustion
+        max_workers = min(cpu_count(), 16)
+        print(f"Processing {data_len} graphs in parallel using {max_workers} workers...")
+
+        # PRE-LOOKUP: Get graph data for each ID (or None if missing)
+        print("Looking up graph data...")
+        args_list = [
+            (graph_ids[i], graphs_dict.get(ids[i], None))
+            for i in range(data_len)
+        ]
+
+        missing_count = sum(1 for _, g in args_list if g is None)
+        if missing_count > 0:
+            print(f"⚠️  {missing_count}/{data_len} graphs not found in graphs_dict")
 
         # Process graphs in parallel with progress bar
-        with Pool(cpu_count()) as pool:
+        with Pool(max_workers) as pool:
             data_list = list(tqdm(
                 pool.imap(_process_single_graph_predict, args_list, chunksize=100),
                 total=data_len,
@@ -279,7 +303,9 @@ class GraphDatasetPredict(InMemoryDataset):
         skipped_count = original_count - len(data_list)
 
         if skipped_count > 0:
-            print(f"⚠️  Skipped {skipped_count}/{data_len} entries due to missing graphs")
+            print(f"✓ Processed {len(data_list)}/{data_len} graphs ({skipped_count} skipped)")
+        else:
+            print(f"✓ Processed all {len(data_list)} graphs successfully")
 
-        print(f'Graph construction done. Saving {len(data_list)} graphs to file.')
+        print(f'Saving {len(data_list)} graphs to file...')
         self.save(data_list, self.processed_paths[0])

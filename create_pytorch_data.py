@@ -12,16 +12,30 @@ Optimizations:
 
 import polars as pl
 import pickle
+import os
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from aev_plig.datasets import GraphDataset
 
 
 def load_pickle(path):
-    """Load a pickle file (for parallel execution)."""
-    print(f"Loading {path}...")
+    """
+    Load a pickle file with progress tracking.
+
+    Shows file size and progress during loading.
+    """
+    # Get file size
+    file_size = os.path.getsize(path) / (1024 * 1024)  # Convert to MB
+    filename = os.path.basename(path)
+
+    print(f"Loading {filename} ({file_size:.1f} MB)...")
+
     with open(path, 'rb') as handle:
-        return pickle.load(handle)
+        # For very large files, we could implement chunked reading here
+        # For now, just load and show completion
+        data = pickle.load(handle)
+        print(f"  ✓ Loaded {filename}: {len(data):,} graphs")
+        return data
 
 
 def main():
@@ -32,9 +46,9 @@ def main():
     # =========================================================================
     # Load graphs in parallel (Phase 1)
     # =========================================================================
-    print("="*60)
-    print("Loading graph pickle files in parallel...")
-    print("="*60)
+    print("="*70)
+    print("PHASE 1: Loading graph pickle files in parallel (3 files)...")
+    print("="*70)
 
     pickle_files = [
         "data/pdbbind.pickle",
@@ -42,26 +56,34 @@ def main():
         "data/bindingdb.pickle"
     ]
 
+    # Calculate total size
+    total_size_mb = sum(os.path.getsize(f) / (1024 * 1024) for f in pickle_files)
+    print(f"Total pickle size: {total_size_mb:.1f} MB\n")
+
     with ThreadPoolExecutor(max_workers=3) as executor:
-        results = list(tqdm(
-            executor.map(load_pickle, pickle_files),
-            total=len(pickle_files),
-            desc="Loading pickles"
-        ))
+        # Submit all tasks
+        futures = [executor.submit(load_pickle, f) for f in pickle_files]
+
+        # Wait for completion with overall progress bar
+        results = []
+        with tqdm(total=len(futures), desc="Overall progress", unit="file") as pbar:
+            for future in futures:
+                results.append(future.result())
+                pbar.update(1)
 
     pdbbind_graphs, bindingnet_graphs, bindingdb_graphs = results
 
     # Merge all graphs into single dictionary
-    print(f"\nMerging {len(pdbbind_graphs)} + {len(bindingnet_graphs)} + {len(bindingdb_graphs)} graphs...")
+    print(f"\nMerging graphs...")
     graphs_dict = {**pdbbind_graphs, **bindingnet_graphs, **bindingdb_graphs}
-    print(f"✓ Total graphs: {len(graphs_dict)}\n")
+    print(f"✓ Total graphs loaded: {len(graphs_dict):,}\n")
 
     # =========================================================================
     # Process CSV files with Polars (Phase 2)
     # =========================================================================
-    print("="*60)
-    print("Processing CSV files with Polars...")
-    print("="*60)
+    print("="*70)
+    print("PHASE 2: Processing CSV files with Polars...")
+    print("="*70)
 
     # Load and filter PDBbind (lazy evaluation for speed)
     print("Processing pdbbind_processed.csv...")
@@ -122,9 +144,9 @@ def main():
     # =========================================================================
     # Create PyTorch Geometric datasets (Phase 3 optimizations in datasets.py)
     # =========================================================================
-    print("\n" + "="*60)
-    print("Creating PyTorch Geometric datasets...")
-    print("="*60)
+    print("\n" + "="*70)
+    print("PHASE 3: Creating PyTorch Geometric datasets (parallel processing)...")
+    print("="*70)
 
     # Extract train/valid/test splits
     train_df = data.filter(pl.col("split") == "train")
@@ -143,9 +165,9 @@ def main():
     print(f"Test set:  {len(test_ids)} samples")
 
     # Create PyTorch Geometric datasets (with progress tracking)
-    print(f"\n{'='*60}")
-    print('Creating train dataset...')
-    print(f"{'='*60}")
+    print(f"\n{'─'*70}")
+    print('Creating TRAIN dataset...')
+    print(f"{'─'*70}")
     train_data = GraphDataset(
         root='data',
         dataset=dataset + '_train',
@@ -154,9 +176,9 @@ def main():
         graphs_dict=graphs_dict
     )
 
-    print(f"\n{'='*60}")
-    print('Creating validation dataset...')
-    print(f"{'='*60}")
+    print(f"\n{'─'*70}")
+    print('Creating VALIDATION dataset...')
+    print(f"{'─'*70}")
     valid_data = GraphDataset(
         root='data',
         dataset=dataset + '_valid',
@@ -165,9 +187,9 @@ def main():
         graphs_dict=graphs_dict
     )
 
-    print(f"\n{'='*60}")
-    print('Creating test dataset...')
-    print(f"{'='*60}")
+    print(f"\n{'─'*70}")
+    print('Creating TEST dataset...')
+    print(f"{'─'*70}")
     test_data = GraphDataset(
         root='data',
         dataset=dataset + '_test',
@@ -176,13 +198,14 @@ def main():
         graphs_dict=graphs_dict
     )
 
-    print("\n" + "="*60)
-    print("✓ All datasets created successfully!")
-    print("="*60)
-    print(f"Train: {len(train_data)} graphs")
-    print(f"Valid: {len(valid_data)} graphs")
-    print(f"Test:  {len(test_data)} graphs")
-    print("="*60)
+    print("\n" + "="*70)
+    print("✓ ALL DATASETS CREATED SUCCESSFULLY!")
+    print("="*70)
+    print(f"  Train: {len(train_data):,} graphs")
+    print(f"  Valid: {len(valid_data):,} graphs")
+    print(f"  Test:  {len(test_data):,} graphs")
+    print(f"  Total: {len(train_data) + len(valid_data) + len(test_data):,} graphs")
+    print("="*70)
 
 
 if __name__ == "__main__":
