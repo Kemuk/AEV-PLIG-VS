@@ -6,12 +6,13 @@
 
 **Goal:** Replace sequential ensemble training with parallel GPU jobs for 10× speedup.
 
-**See:** [PARALLEL_TRAINING_PLAN.md](PARALLEL_TRAINING_PLAN.md) for detailed implementation plan
+**See:** [MINIMAL_PARALLEL_PLAN.md](MINIMAL_PARALLEL_PLAN.md) for implementation plan
 
 **Quick Summary:**
 - Current: 1 job trains 10 models sequentially (~40 hours)
 - Target: 10 jobs train 10 models in parallel (~4 hours with 10 GPUs)
-- Test mode: `./slurm/submit_training.sh --test` (devel partition, 2 epochs, 3 seeds)
+- Changes: 4 files, ~85 lines total (simple bash loop, no complex flags)
+- Test: `sbatch slurm/tests/jobs/03_train_quick.sh` (1 seed, 2 epochs, <10 min)
 - Production: `./slurm/submit_training.sh` (all seeds from config)
 
 ---
