@@ -11,6 +11,7 @@
 #
 # Configuration is loaded from slurm/config.sh
 # =============================================================================
+set -euo pipefail
 
 # Get directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,18 +90,22 @@ echo "Timestamp: ${TIMESTAMP}"
 echo "========================================="
 echo ""
 
-# Train single model
-aev-plig-train \\
-    --model ${MODEL} \\
-    --dataset ${DATASET} \\
-    --seed ${SEED} \\
-    --timestamp ${TIMESTAMP} \\
-    --activation_function ${ACTIVATION} \\
-    --batch_size ${BATCH_SIZE} \\
-    --epochs ${EPOCHS} \\
-    --head ${HEAD} \\
-    --hidden_dim ${HIDDEN_DIM} \\
-    --lr ${LR}
+# Train single model (array form avoids whitespace/line-continuation argument bugs)
+train_cmd=(
+    aev-plig-train
+    --model "${MODEL}"
+    --dataset "${DATASET}"
+    --seed "${SEED}"
+    --timestamp "${TIMESTAMP}"
+    --activation_function "${ACTIVATION}"
+    --batch_size "${BATCH_SIZE}"
+    --epochs "${EPOCHS}"
+    --head "${HEAD}"
+    --hidden_dim "${HIDDEN_DIM}"
+    --lr "${LR}"
+)
+printf 'CMD: %q ' "${train_cmd[@]}"; echo
+"${train_cmd[@]}"
 
 echo ""
 echo "✓ Seed ${SEED} training complete"
