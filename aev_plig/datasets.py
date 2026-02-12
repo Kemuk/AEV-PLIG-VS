@@ -16,7 +16,7 @@ import numpy as np
 from torch_geometric.data import InMemoryDataset, Data
 import torch
 from sklearn.preprocessing import StandardScaler
-from multiprocessing import Pool, cpu_count
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
 
@@ -174,8 +174,8 @@ class GraphDataset(InMemoryDataset):
 
         # Limit workers to prevent memory exhaustion (each worker needs memory for graph processing)
         # Use at most 16 workers, or fewer if less CPUs available
-        max_workers = min(cpu_count(), 16)
-        print(f"Processing {data_len} graphs in parallel using {max_workers} workers...")
+        max_workers = min(os.cpu_count(), 16)
+        print(f"Processing {data_len} graphs using {max_workers} threads...")
 
         # PRE-LOOKUP: Get graph data for each ID (or None if missing)
         # This way we only pass small tuples to workers, not the entire graphs_dict
@@ -189,10 +189,10 @@ class GraphDataset(InMemoryDataset):
         if missing_count > 0:
             print(f"⚠️  {missing_count}/{data_len} graphs not found in graphs_dict")
 
-        # Process graphs in parallel with progress bar
-        with Pool(max_workers) as pool:
+        # Process graphs with threads (no IPC serialization overhead)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             data_list = list(tqdm(
-                pool.imap(_process_single_graph_train, args_list, chunksize=100),
+                executor.map(_process_single_graph_train, args_list, chunksize=1000),
                 total=data_len,
                 desc="Processing graphs",
                 unit="graphs"
@@ -274,8 +274,8 @@ class GraphDatasetPredict(InMemoryDataset):
         data_len = len(ids)
 
         # Limit workers to prevent memory exhaustion
-        max_workers = min(cpu_count(), 16)
-        print(f"Processing {data_len} graphs in parallel using {max_workers} workers...")
+        max_workers = min(os.cpu_count(), 16)
+        print(f"Processing {data_len} graphs using {max_workers} threads...")
 
         # PRE-LOOKUP: Get graph data for each ID (or None if missing)
         print("Looking up graph data...")
@@ -288,10 +288,10 @@ class GraphDatasetPredict(InMemoryDataset):
         if missing_count > 0:
             print(f"⚠️  {missing_count}/{data_len} graphs not found in graphs_dict")
 
-        # Process graphs in parallel with progress bar
-        with Pool(max_workers) as pool:
+        # Process graphs with threads (no IPC serialization overhead)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             data_list = list(tqdm(
-                pool.imap(_process_single_graph_predict, args_list, chunksize=100),
+                executor.map(_process_single_graph_predict, args_list, chunksize=1000),
                 total=data_len,
                 desc="Processing graphs",
                 unit="graphs"
