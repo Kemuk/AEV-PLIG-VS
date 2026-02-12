@@ -36,14 +36,13 @@ from . import utils
 from . import neurochem
 from . import models
 from . import units
-from pkg_resources import get_distribution, DistributionNotFound
 import warnings
 
 try:
-    __version__ = get_distribution(__name__).version
-except DistributionNotFound:
-    # package is not installed
-    pass
+    from importlib.metadata import version, PackageNotFoundError
+    __version__ = version(__name__)
+except (PackageNotFoundError, Exception):
+    __version__ = "unknown"
 
 __all__ = ['AEVComputer', 'EnergyShifter', 'ANIModel', 'Ensemble', 'SpeciesConverter',
            'utils', 'neurochem', 'models', 'units']
