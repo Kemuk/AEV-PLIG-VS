@@ -7,12 +7,13 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --output=logs/data_%j.out
 #SBATCH --error=logs/data_%j.err
+#SBATCH --chdir=$DATA/AEV-PLIG-VS
 # =============================================================================
 # Step 2: Create PyTorch datasets from generated graph pickles.
 # Combines pdbbind, bindingnet, and bindingdb into train/valid/test splits.
 # =============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/../config.sh"
+source slurm/config.sh
 
 echo "Creating PyTorch datasets..."
 python create_pytorch_data.py

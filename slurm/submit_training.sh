@@ -1,77 +1,50 @@
 #!/bin/bash
 # =============================================================================
-# Submit training pipeline: graphs → data → train
+# Submit parallel ensemble training jobs
 # Usage: ./slurm/submit_training.sh
+#
+# Submits one SLURM job per seed for parallel training.
+# All models share the same timestamp and are saved to:
+#   models/{model}_{timestamp}/model_seed_{seed}.model
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Function to wait for a job to complete on a specific cluster
-wait_for_job() {
-    local cluster=$1
-    local job_id=$2
-    local timeout=${3:-36000}  # Default 10 hours
-    local elapsed=0
-    local interval=30
-    
-    echo "Waiting for job $job_id on $cluster cluster to complete..."
-    
-    while [[ $elapsed -lt $timeout ]]; do
-        # Query job state (suppress errors if job no longer exists)
-        STATE=$(squeue --cluster="$cluster" -j "$job_id" -h -o "%T" 2>/dev/null || echo "NOT_FOUND")
-        
-        if [[ "$STATE" == "NOT_FOUND" ]] || [[ -z "$STATE" ]]; then
-            # Job not in queue = completed successfully (or check sacct for final state)
-            FINAL_STATE=$(sacct --cluster="$cluster" -j "$job_id" -n -o State -P 2>/dev/null | head -1 || echo "COMPLETED")
-            if [[ "$FINAL_STATE" =~ ^(COMPLETED|COMPLETING)$ ]]; then
-                echo "✓ Job $job_id completed successfully"
-                return 0
-            elif [[ "$FINAL_STATE" =~ ^(FAILED|CANCELLED|TIMEOUT|NODE_FAIL)$ ]]; then
-                echo "✗ ERROR: Job $job_id failed with state: $FINAL_STATE"
-                return 1
-            else
-                # Assume completed if not in queue and no error state found
-                echo "✓ Job $job_id completed (state: $FINAL_STATE)"
-                return 0
-            fi
-        elif [[ "$STATE" =~ ^(FAILED|CANCELLED|TIMEOUT|NODE_FAIL)$ ]]; then
-            echo "✗ ERROR: Job $job_id failed with state: $STATE"
-            return 1
-        fi
-        
-        # Job still running
-        sleep "$interval"
-        elapsed=$((elapsed + interval))
-        
-        # Progress indicator every 5 minutes
-        if [[ $((elapsed % 300)) -eq 0 ]]; then
-            echo "  Still waiting... (${elapsed}s elapsed, state: $STATE)"
-        fi
-    done
-    
-    echo "✗ ERROR: Timeout waiting for job $job_id (${timeout}s)"
-    return 1
-}
+echo "Submitting parallel ensemble training..."
 
-echo "Submitting training pipeline (arc/htc clusters)..."
+# Read seeds from Python config (single source of truth)
+SEEDS=($(python3 -c "from aev_plig.config import Config; print(' '.join(map(str, Config.ENSEMBLE_SEEDS)))"))
 
-# Submit job 1 to arc cluster
-J1=$(sbatch --cluster=arc --parsable "$SCRIPT_DIR/jobs/01_generate_graphs.sh" | cut -d';' -f1)
-echo "  01_generate_graphs: $J1 (arc)"
+# Validate seeds (check for duplicates)
+if ! python3 -c "from aev_plig.config import Config; Config.validate_ensemble_seeds()"; then
+    echo "ERROR: Seed validation failed!"
+    exit 1
+fi
 
-# Wait for job 1 to complete before submitting job 2 to different cluster
-wait_for_job arc "$J1" || exit 1
+# Generate shared timestamp for all models
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Submit job 2 to htc cluster (no dependency needed, J1 already completed)
-J2=$(sbatch --cluster=htc --parsable "$SCRIPT_DIR/jobs/02_create_data.sh" | cut -d';' -f1)
-echo "  02_create_data:     $J2 (htc)"
+echo "Seeds: ${SEEDS[*]}"
+echo "Count: ${#SEEDS[@]} models"
+echo "Timestamp: $TIMESTAMP"
+echo ""
 
-# Submit job 3 to htc cluster (native dependency works - same cluster)
-J3=$(sbatch --cluster=htc --parsable --dependency=afterok:"$J2" "$SCRIPT_DIR/jobs/03_train.sh" | cut -d';' -f1)
-echo "  03_train:           $J3 (htc, after $J2)"
+# Submit one job per seed
+JOB_IDS=()
+for seed in "${SEEDS[@]}"; do
+    JOB_ID=$(sbatch \
+        --cluster=htc \
+        --parsable \
+        --export=ALL,SEED=$seed,TIMESTAMP=$TIMESTAMP \
+        "$SCRIPT_DIR/jobs/03_train.sh" | cut -d';' -f1)
+
+    JOB_IDS+=($JOB_ID)
+    echo "  Seed $seed → Job $JOB_ID"
+done
 
 echo ""
-echo "Pipeline submitted. Monitor with:"
-echo "  squeue -u \$USER --cluster=htc  # for data creation and training"
-echo "  tail -f logs/train_${J3}.out"
+echo "Submitted ${#SEEDS[@]} parallel jobs: ${JOB_IDS[*]}"
+echo ""
+echo "Monitor: squeue -u \$USER --cluster=htc"
+echo "Logs:    tail -f logs/train_*.out"

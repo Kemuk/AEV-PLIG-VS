@@ -99,6 +99,22 @@ class Config:
     # Loss function
     LOSS_FUNCTION = 'mse'  # Mean squared error
 
+    @staticmethod
+    def validate_ensemble_seeds():
+        """
+        Validate that ENSEMBLE_SEEDS contains no duplicates.
+
+        Raises:
+            ValueError: If duplicate seeds are found
+        """
+        seeds = Config.ENSEMBLE_SEEDS
+        if len(seeds) != len(set(seeds)):
+            duplicates = [s for s in seeds if seeds.count(s) > 1]
+            raise ValueError(
+                f"Duplicate seeds found in Config.ENSEMBLE_SEEDS: {set(duplicates)}\n"
+                f"Each seed must be unique to avoid overwriting models!"
+            )
+
     # ==================== Data Split ====================
     TRAIN_RATIO = 0.8
     VALID_RATIO = 0.1

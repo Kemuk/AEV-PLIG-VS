@@ -1,25 +1,132 @@
 #!/bin/bash
-#SBATCH --job-name=aev-train-quick
-#SBATCH --cluster=htc
-#SBATCH --partition=short
-#SBATCH --time=02:00:00
-#SBATCH --mem=20GB
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
-#SBATCH --output=logs/train_quick_%j.out
-#SBATCH --error=logs/train_quick_%j.err
 # =============================================================================
-# Quick test: train for 5 epochs only (vs 200 in production).
-# Use to verify GPU allocation, data loading, and training loop.
+# Quick parallel training test (10 minutes)
+#
+# Tests parallel training with:
+# - 3 seeds only (vs 10 in production)
+# - 2 epochs (vs 200 in production)
+# - Devel partition (10 min max)
+#
+# Usage:
+#   ./slurm/tests/jobs/03_train_quick.sh
 # =============================================================================
 
-source "$(dirname "$0")/../../config.sh"
+# Get directory of this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-echo "Quick test: training for 5 epochs..."
+# Load configuration
+source "$PROJECT_ROOT/slurm/config.sh"
 
-aev-plig-train \
-    --model "$MODEL_NAME" \
-    --dataset "$DATASET_NAME" \
-    --epochs 5
+# Training configuration
+MODEL="${MODEL_NAME}"
+DATASET="${DATASET_NAME}"
 
-echo "Quick training test completed."
+# Hyperparameters (matching original training command)
+ACTIVATION="leaky_relu"
+BATCH_SIZE=128
+EPOCHS=2  # Quick test: only 2 epochs
+HEAD=3
+HIDDEN_DIM=256
+LR=0.00012291937615434127
+
+# SLURM settings (quick test)
+PARTITION="${PARTITION_DEVEL}"
+TIME_LIMIT="00:10:00"  # 10 min max for devel
+MEM="${MEM_STANDARD}"
+CPUS="${CPUS_STANDARD}"
+GPUS=1
+
+# Quick test: only 3 seeds
+SEEDS=(100 123 15)
+
+# Create shared timestamp for ensemble
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+echo "========================================"
+echo "QUICK TEST: Parallel Training"
+echo "========================================"
+echo "Model:        ${MODEL}"
+echo "Dataset:      ${DATASET}"
+echo "Seeds:        ${#SEEDS[@]} models (TEST)"
+echo "Epochs:       ${EPOCHS} (TEST)"
+echo "Timestamp:    ${TIMESTAMP}"
+echo "Partition:    ${PARTITION} (10 min max)"
+echo "Output dir:   output/trained_models/${MODEL}_${TIMESTAMP}/"
+echo "========================================"
+echo ""
+
+# Create log directory if needed
+mkdir -p "$PROJECT_ROOT/slurm/logs"
+
+# Submit parallel jobs
+JOB_IDS=()
+for SEED in "${SEEDS[@]}"; do
+    echo "Submitting seed ${SEED}..."
+
+    JOB_ID=$(sbatch --parsable <<EOF
+#!/bin/bash
+#SBATCH --job-name=train_quick_s${SEED}
+#SBATCH --cluster=${CLUSTER_NAME}
+#SBATCH --partition=${PARTITION}
+#SBATCH --time=${TIME_LIMIT}
+#SBATCH --mem=${MEM}
+#SBATCH --cpus-per-task=${CPUS}
+#SBATCH --gres=gpu:${GPUS}
+#SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%j.out
+#SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%j.err
+#SBATCH --chdir=${PROJECT_ROOT}
+
+# Load environment
+source ${PROJECT_ROOT}/slurm/config.sh
+
+echo "========================================="
+echo "QUICK TEST: Training Seed ${SEED}"
+echo "========================================="
+echo "Node:      \$(hostname)"
+echo "Job ID:    \${SLURM_JOB_ID}"
+echo "Timestamp: ${TIMESTAMP}"
+echo "Epochs:    ${EPOCHS}"
+echo "========================================="
+echo ""
+
+# Train single model
+aev-plig-train \\
+    --model ${MODEL} \\
+    --dataset ${DATASET} \\
+    --seed ${SEED} \\
+    --timestamp ${TIMESTAMP} \\
+    --activation_function ${ACTIVATION} \\
+    --batch_size ${BATCH_SIZE} \\
+    --epochs ${EPOCHS} \\
+    --head ${HEAD} \\
+    --hidden_dim ${HIDDEN_DIM} \\
+    --lr ${LR}
+
+echo ""
+echo "✓ Seed ${SEED} quick test complete"
+echo "✓ Model saved to: output/trained_models/${MODEL}_${TIMESTAMP}/model_seed_${SEED}.model"
+EOF
+)
+
+    JOB_IDS+=("${JOB_ID}")
+    echo "  → Job ID: ${JOB_ID}"
+done
+
+echo ""
+echo "========================================"
+echo "✓ Submitted ${#SEEDS[@]} quick test jobs"
+echo "========================================"
+echo "Job IDs: ${JOB_IDS[*]}"
+echo ""
+echo "Monitor jobs with:"
+echo "  squeue -u \$USER"
+echo ""
+echo "View logs in:"
+echo "  ${PROJECT_ROOT}/slurm/logs/"
+echo ""
+echo "Expected runtime: ~5-10 minutes per job"
+echo ""
+echo "Output will be saved to:"
+echo "  output/trained_models/${MODEL}_${TIMESTAMP}/"
+echo "========================================"
