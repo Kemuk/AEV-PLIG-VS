@@ -8,11 +8,14 @@ import torch
 import random
 import time
 import os
+import json
 import pandas as pd
 import argparse
 import pickle
+from pathlib import Path
 
 from torch_geometric.loader import DataLoader
+from torch.utils.data import ConcatDataset
 from aev_plig.datasets import init_weights
 from aev_plig.models import get_model
 from aev_plig.training import Trainer, pearson, rmse
@@ -67,13 +70,46 @@ def train_ensemble(args):
     print(f"Output directory: {output_dir}")
     print(f"Timestamp: {timestamp}\n")
 
-    # Load datasets
-    train_data = torch.load(f'data/processed/{args.dataset}_train.pt', weights_only=False)
-    valid_data = torch.load(f'data/processed/{args.dataset}_valid.pt', weights_only=False)
-    test_data = torch.load(f'data/processed/{args.dataset}_test.pt', weights_only=False)
+    def load_split_dataset(dataset_name, split):
+        """Load split data from chunked manifest format, with flat-file fallback."""
+        dataset_root = Path("data/processed") / dataset_name
+        split_dir = dataset_root / split
+        manifest_path = split_dir / "manifest.json"
 
-    with open(f'data/processed/{args.dataset}_scaler.pickle', 'rb') as f:
-        y_scaler = pickle.load(f)
+        if manifest_path.exists():
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+
+            parts = [
+                torch.load(split_dir / part_name, weights_only=False)
+                for part_name in manifest["parts"]
+            ]
+
+            if len(parts) == 1:
+                return parts[0]
+            return ConcatDataset(parts)
+
+        legacy_path = Path("data/processed") / f"{dataset_name}_{split}.pt"
+        if legacy_path.exists():
+            return torch.load(legacy_path, weights_only=False)
+
+        raise FileNotFoundError(
+            f"No dataset artifacts found for split '{split}'. Checked {manifest_path} and {legacy_path}."
+        )
+
+    # Load datasets
+    train_data = load_split_dataset(args.dataset, "train")
+    valid_data = load_split_dataset(args.dataset, "valid")
+    test_data = load_split_dataset(args.dataset, "test")
+
+    scaler_path = Path("data/processed") / args.dataset / "scaler.pickle"
+    legacy_scaler_path = Path("data/processed") / f"{args.dataset}_scaler.pickle"
+    if scaler_path.exists():
+        with open(scaler_path, 'rb') as f:
+            y_scaler = pickle.load(f)
+    else:
+        with open(legacy_scaler_path, 'rb') as f:
+            y_scaler = pickle.load(f)
 
     num_node_features = train_data[0].x.shape[1]
     num_edge_features = train_data[0].edge_attr.shape[1]
