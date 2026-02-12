@@ -30,7 +30,6 @@ dependencies = [
     "torch-geometric>=2.3.0",
     "torch-scatter>=2.1.0",
     "rdkit>=2023.0.0",
-    "torchani>=2.2.0",
     "biopandas>=0.4.0",
     "qcelemental>=0.25.0",
     "scikit-learn>=1.0.0",
@@ -57,7 +56,10 @@ zip-safe = false
 
 [tool.setuptools.packages.find]
 include = ["aev_plig*", "torchani_mod*", "scripts*"]
-exclude = ["tests*", "data", "output"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+torchani_mod = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
