@@ -38,6 +38,7 @@ module load CUDA
 
 # Isolate conda env from user-site packages (~/.local)
 export PYTHONNOUSERSITE=1
+export PYTHONUNBUFFERED=1
 
 # Activate conda environment and ensure its binaries are on PATH
 CONDA_ENV="$DATA/envs/aev-plig"
