@@ -16,7 +16,6 @@ from functools import partial
 
 from aev_plig.loaders import load_ligand_atoms, load_protein_atoms_biopandas, compute_aevs
 from aev_plig.graphs import create_graph
-from aev_plig.datasets import GraphDatasetPredict
 from aev_plig.config import Config
 from torch_geometric.loader import DataLoader
 
@@ -310,7 +309,7 @@ class Predictor:
         Make predictions on a dataset using ensemble of models.
 
         Args:
-            dataset: GraphDatasetPredict instance
+            dataset: list[torch_geometric.data.Data]
 
         Returns:
             pd.DataFrame: Predictions with columns ['graph_id', 'preds_0', ..., 'preds']
@@ -321,8 +320,8 @@ class Predictor:
 
         # Initialize model architecture
         model = self.model_class(
-            node_feature_dim=dataset.num_node_features,
-            edge_feature_dim=dataset.num_edge_features,
+            node_feature_dim=dataset[0].x.shape[1],
+            edge_feature_dim=dataset[0].edge_attr.shape[1],
             config=self.config
         )
 

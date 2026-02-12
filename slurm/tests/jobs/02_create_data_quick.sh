@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=aev-data-quick
 #SBATCH --cluster=htc
-#SBATCH --partition=short
-#SBATCH --time=00:30:00
+#SBATCH --partition=devel
+#SBATCH --time=00:10:00
 #SBATCH --mem=20GB
 #SBATCH --cpus-per-task=8
 #SBATCH --output=logs/data_quick_%j.out

@@ -13,7 +13,7 @@ import argparse
 import pickle
 
 from torch_geometric.loader import DataLoader
-from aev_plig.datasets import GraphDataset, init_weights
+from aev_plig.datasets import init_weights
 from aev_plig.models import get_model
 from aev_plig.training import Trainer, pearson, rmse
 from aev_plig.config import Config
@@ -68,12 +68,17 @@ def train_ensemble(args):
     print(f"Timestamp: {timestamp}\n")
 
     # Load datasets
-    train_data = GraphDataset(root='data', dataset=args.dataset + '_train', y_scaler=None)
-    valid_data = GraphDataset(root='data', dataset=args.dataset + '_valid', y_scaler=train_data.y_scaler)
-    test_data = GraphDataset(root='data', dataset=args.dataset + '_test', y_scaler=train_data.y_scaler)
+    train_data = torch.load(f'data/processed/{args.dataset}_train.pt', weights_only=False)
+    valid_data = torch.load(f'data/processed/{args.dataset}_valid.pt', weights_only=False)
+    test_data = torch.load(f'data/processed/{args.dataset}_test.pt', weights_only=False)
 
-    print(f"Number of node features: {train_data.num_node_features}")
-    print(f"Number of edge features: {train_data.num_edge_features}")
+    with open(f'data/processed/{args.dataset}_scaler.pickle', 'rb') as f:
+        y_scaler = pickle.load(f)
+
+    num_node_features = train_data[0].x.shape[1]
+    num_edge_features = train_data[0].edge_attr.shape[1]
+    print(f"Number of node features: {num_node_features}")
+    print(f"Number of edge features: {num_edge_features}")
 
     # Detect device
     if torch.cuda.is_available():
@@ -100,8 +105,8 @@ def train_ensemble(args):
         # Create model
         model = get_model(
             args.model,
-            node_feature_dim=train_data.num_node_features,
-            edge_feature_dim=train_data.num_edge_features,
+            node_feature_dim=num_node_features,
+            edge_feature_dim=num_edge_features,
             config=args
         )
         model.apply(init_weights)
@@ -112,7 +117,7 @@ def train_ensemble(args):
             train_loader=train_loader,
             valid_loader=valid_loader,
             device=device,
-            y_scaler=train_data.y_scaler,
+            y_scaler=y_scaler,
             learning_rate=args.lr
         )
 
@@ -137,7 +142,7 @@ def train_ensemble(args):
     scaler_filename = f"scaler.pickle"
     scaler_path = os.path.join(output_dir, scaler_filename)
     with open(scaler_path, 'wb') as f:
-        pickle.dump(train_data.y_scaler, f)
+        pickle.dump(y_scaler, f)
 
     print(f"✓ Saved scaler: {scaler_path}")
 

@@ -17,9 +17,10 @@ Usage: QUICK_TEST=1 python create_pytorch_data.py
 import polars as pl
 import pickle
 import os
+import torch
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-from aev_plig.datasets import GraphDataset
+from aev_plig.datasets import create_dataset
 
 # Check for quick test mode (dry run with test split only)
 QUICK_TEST = os.getenv('QUICK_TEST', '0') == '1'
@@ -203,8 +204,9 @@ def main():
     # Create PyTorch Geometric datasets (Phase 3 optimizations in datasets.py)
     # =========================================================================
     print("\n" + "="*70)
-    print("PHASE 3: Creating PyTorch Geometric datasets (parallel processing)...")
+    print("PHASE 3: Creating PyTorch Geometric datasets...")
     print("="*70)
+    os.makedirs("data/processed", exist_ok=True)
 
     if QUICK_TEST:
         # QUICK TEST MODE: Only create test dataset
@@ -215,19 +217,23 @@ def main():
         print(f"\n{'─'*70}")
         print('Creating TEST dataset...')
         print(f"{'─'*70}")
-        test_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_test',
-            ids=test_ids,
-            y=test_y,
-            graphs_dict=graphs_dict
+        test_data, test_scaler = create_dataset(
+            test_ids,
+            test_y,
+            graphs_dict,
+            scale=True,
         )
+        test_output = f"data/processed/{dataset}_test.pt"
+        torch.save(test_data, test_output)
+        scaler_output = f"data/processed/{dataset}_scaler.pickle"
+        with open(scaler_output, "wb") as handle:
+            pickle.dump(test_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         print("\n" + "="*70)
         print("✓ QUICK TEST COMPLETED SUCCESSFULLY!")
         print("="*70)
         print(f"  Test:  {len(test_data):,} graphs")
-        print(f"  Output: data/processed/{dataset}_test.pt")
+        print(f"  Output: {test_output}")
         print("="*70)
 
     else:
@@ -252,35 +258,39 @@ def main():
         print(f"\n{'─'*70}")
         print('Creating TRAIN dataset...')
         print(f"{'─'*70}")
-        train_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_train',
-            ids=train_ids,
-            y=train_y,
-            graphs_dict=graphs_dict
+        train_data, y_scaler = create_dataset(
+            train_ids,
+            train_y,
+            graphs_dict,
+            scale=True,
         )
+        torch.save(train_data, f"data/processed/{dataset}_train.pt")
 
         print(f"\n{'─'*70}")
         print('Creating VALIDATION dataset...')
         print(f"{'─'*70}")
-        valid_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_valid',
-            ids=valid_ids,
-            y=valid_y,
-            graphs_dict=graphs_dict
+        valid_data, _ = create_dataset(
+            valid_ids,
+            valid_y,
+            graphs_dict,
+            scale=True,
+            y_scaler=y_scaler,
         )
+        torch.save(valid_data, f"data/processed/{dataset}_valid.pt")
 
         print(f"\n{'─'*70}")
         print('Creating TEST dataset...')
         print(f"{'─'*70}")
-        test_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_test',
-            ids=test_ids,
-            y=test_y,
-            graphs_dict=graphs_dict
+        test_data, _ = create_dataset(
+            test_ids,
+            test_y,
+            graphs_dict,
+            scale=True,
+            y_scaler=y_scaler,
         )
+        torch.save(test_data, f"data/processed/{dataset}_test.pt")
+        with open(f"data/processed/{dataset}_scaler.pickle", "wb") as handle:
+            pickle.dump(y_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         print("\n" + "="*70)
         print("✓ ALL DATASETS CREATED SUCCESSFULLY!")
