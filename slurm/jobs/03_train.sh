@@ -104,8 +104,8 @@ train_cmd=(
     --hidden_dim "${HIDDEN_DIM}"
     --lr "${LR}"
 )
-printf 'CMD: %q ' "${train_cmd[@]}"; echo
-"${train_cmd[@]}"
+printf 'CMD: %q ' "\${train_cmd[@]}"; echo
+"\${train_cmd[@]}"
 
 echo ""
 echo "✓ Seed ${SEED} training complete"
