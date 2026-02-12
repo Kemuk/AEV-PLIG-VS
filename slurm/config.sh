@@ -38,6 +38,7 @@ module load CUDA
 
 # Isolate conda env from user-site packages (~/.local)
 export PYTHONNOUSERSITE=1
+export PYTHONUNBUFFERED=1
 
 # Activate conda environment and ensure its binaries are on PATH
 CONDA_ENV="$DATA/envs/aev-plig"
@@ -45,6 +46,10 @@ export PATH="$CONDA_ENV/bin:$PATH"
 export LD_LIBRARY_PATH="$CONDA_ENV/lib:${LD_LIBRARY_PATH:-}"
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
+
+# Re-assert env path after activation/module hooks and clear shell command cache
+export PATH="$CONDA_ENV/bin:$PATH"
+hash -r
 
 # Create directories
 mkdir -p "$LOG_DIR"
@@ -59,6 +64,8 @@ echo "Node:         $(hostname)"
 echo "Project root: $PROJECT_ROOT"
 echo "Conda env:    $CONDA_ENV"
 echo "Python:       $(which python)"
+echo "Python ver:   $(python -V 2>&1)"
+echo "Train entry:  $(command -v aev-plig-train || echo 'not found')"
 if command -v nvidia-smi &> /dev/null; then
     echo "GPU:          $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 fi

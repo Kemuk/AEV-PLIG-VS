@@ -15,7 +15,7 @@ import sys
 import warnings
 
 from aev_plig.prediction import Validator, GraphProcessor, Predictor
-from aev_plig.datasets import GraphDatasetPredict
+from aev_plig.datasets import create_dataset
 from aev_plig.models import MODEL_REGISTRY
 from aev_plig.config import Config
 import numpy as np
@@ -142,17 +142,11 @@ def main():
     test_ids = list(df["unique_id"])
     test_graph_ids = list(df["graph_id"])
 
-    # Remove existing .pt file if present
-    pt_file = f"data/processed/{config.data_name}.pt"
-    if os.path.exists(pt_file):
-        os.remove(pt_file)
-
-    test_data = GraphDatasetPredict(
-        root='data',
-        dataset=config.data_name,
-        ids=test_ids,
-        graph_ids=test_graph_ids,
-        graphs_dict=mol_graphs
+    test_data, _ = create_dataset(
+        test_ids,
+        test_graph_ids,
+        mol_graphs,
+        scale=False,
     )
 
     # ==================== Step 4: Make Predictions ====================

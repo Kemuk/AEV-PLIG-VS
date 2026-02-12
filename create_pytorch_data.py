@@ -17,12 +17,17 @@ Usage: QUICK_TEST=1 python create_pytorch_data.py
 import polars as pl
 import pickle
 import os
+import json
+import torch
+from pathlib import Path
+from collections import ChainMap
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-from aev_plig.datasets import GraphDataset
+from aev_plig.datasets import create_dataset
 
 # Check for quick test mode (dry run with test split only)
 QUICK_TEST = os.getenv('QUICK_TEST', '0') == '1'
+CHUNK_SIZE = int(os.getenv('PHASE3_CHUNK_SIZE', '10000'))
 
 
 def load_pickle(path):
@@ -43,6 +48,50 @@ def load_pickle(path):
         data = pickle.load(handle)
         print(f"  ✓ Loaded {filename}: {len(data):,} graphs")
         return data
+
+
+def write_split_chunks(split_dir, ids, targets, graphs_lookup, chunk_size, scale=False, y_scaler=None):
+    """
+    Create a split in chunked .pt files and write a JSON manifest.
+
+    Returns:
+        tuple[int, StandardScaler | None]: number of graphs written and scaler.
+    """
+    split_dir.mkdir(parents=True, exist_ok=True)
+
+    total_graphs = 0
+    part_files = []
+    scaler = y_scaler
+
+    for offset in range(0, len(ids), chunk_size):
+        ids_chunk = ids[offset:offset + chunk_size]
+        targets_chunk = targets[offset:offset + chunk_size]
+
+        data_chunk, scaler = create_dataset(
+            ids_chunk,
+            targets_chunk,
+            graphs_lookup,
+            scale=scale,
+            y_scaler=scaler,
+        )
+
+        part_name = f"part-{offset // chunk_size:05d}.pt"
+        torch.save(data_chunk, split_dir / part_name)
+        part_files.append(part_name)
+        total_graphs += len(data_chunk)
+
+    manifest = {
+        "split": split_dir.name,
+        "chunk_size": chunk_size,
+        "num_input_rows": len(ids),
+        "num_graphs_written": total_graphs,
+        "parts": part_files,
+    }
+
+    with open(split_dir / "manifest.json", "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2)
+
+    return total_graphs, scaler
 
 
 def main():
@@ -86,10 +135,10 @@ def main():
 
     pdbbind_graphs, bindingnet_graphs, bindingdb_graphs = results
 
-    # Merge all graphs into single dictionary
-    print(f"\nMerging graphs...")
-    graphs_dict = {**pdbbind_graphs, **bindingnet_graphs, **bindingdb_graphs}
-    print(f"✓ Total graphs loaded: {len(graphs_dict):,}\n")
+    # Use layered lookup to avoid duplicating ~9GB dict with a merge copy
+    print(f"\nPreparing graph lookup...")
+    graphs_lookup = ChainMap(bindingdb_graphs, bindingnet_graphs, pdbbind_graphs)
+    print(f"✓ Total graphs available: {len(graphs_lookup):,}\n")
 
     # =========================================================================
     # Process CSV files with Polars (Phase 2)
@@ -195,7 +244,7 @@ def main():
         data = pl.concat([pdbbind, bindingnet, bindingdb])
         print(f"\n✓ Total combined entries: {len(data)}")
         print("\nSplit distribution:")
-        print(data.group_by("split").agg(pl.count()).sort("split"))
+        print(data.group_by("split").agg(pl.len().alias("count")).sort("split"))
 
         dataset = 'pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark'
 
@@ -203,8 +252,12 @@ def main():
     # Create PyTorch Geometric datasets (Phase 3 optimizations in datasets.py)
     # =========================================================================
     print("\n" + "="*70)
-    print("PHASE 3: Creating PyTorch Geometric datasets (parallel processing)...")
+    print("PHASE 3: Creating PyTorch Geometric datasets...")
     print("="*70)
+    processed_root = Path("data/processed")
+    processed_root.mkdir(parents=True, exist_ok=True)
+    dataset_root = processed_root / dataset
+    dataset_root.mkdir(parents=True, exist_ok=True)
 
     if QUICK_TEST:
         # QUICK TEST MODE: Only create test dataset
@@ -215,19 +268,25 @@ def main():
         print(f"\n{'─'*70}")
         print('Creating TEST dataset...')
         print(f"{'─'*70}")
-        test_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_test',
-            ids=test_ids,
-            y=test_y,
-            graphs_dict=graphs_dict
+        test_dir = dataset_root / "test"
+        written_test, test_scaler = write_split_chunks(
+            test_dir,
+            test_ids,
+            test_y,
+            graphs_lookup,
+            CHUNK_SIZE,
+            scale=True,
         )
+
+        scaler_output = dataset_root / "scaler.pickle"
+        with open(scaler_output, "wb") as handle:
+            pickle.dump(test_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         print("\n" + "="*70)
         print("✓ QUICK TEST COMPLETED SUCCESSFULLY!")
         print("="*70)
-        print(f"  Test:  {len(test_data):,} graphs")
-        print(f"  Output: data/processed/{dataset}_test.pt")
+        print(f"  Test:  {written_test:,} graphs")
+        print(f"  Output directory: {dataset_root}")
         print("="*70)
 
     else:
@@ -252,43 +311,54 @@ def main():
         print(f"\n{'─'*70}")
         print('Creating TRAIN dataset...')
         print(f"{'─'*70}")
-        train_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_train',
-            ids=train_ids,
-            y=train_y,
-            graphs_dict=graphs_dict
+        train_dir = dataset_root / "train"
+        written_train, y_scaler = write_split_chunks(
+            train_dir,
+            train_ids,
+            train_y,
+            graphs_lookup,
+            CHUNK_SIZE,
+            scale=True,
         )
 
         print(f"\n{'─'*70}")
         print('Creating VALIDATION dataset...')
         print(f"{'─'*70}")
-        valid_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_valid',
-            ids=valid_ids,
-            y=valid_y,
-            graphs_dict=graphs_dict
+        valid_dir = dataset_root / "valid"
+        written_valid, _ = write_split_chunks(
+            valid_dir,
+            valid_ids,
+            valid_y,
+            graphs_lookup,
+            CHUNK_SIZE,
+            scale=True,
+            y_scaler=y_scaler,
         )
 
         print(f"\n{'─'*70}")
         print('Creating TEST dataset...')
         print(f"{'─'*70}")
-        test_data = GraphDataset(
-            root='data',
-            dataset=dataset + '_test',
-            ids=test_ids,
-            y=test_y,
-            graphs_dict=graphs_dict
+        test_dir = dataset_root / "test"
+        written_test, _ = write_split_chunks(
+            test_dir,
+            test_ids,
+            test_y,
+            graphs_lookup,
+            CHUNK_SIZE,
+            scale=True,
+            y_scaler=y_scaler,
         )
+        with open(dataset_root / "scaler.pickle", "wb") as handle:
+            pickle.dump(y_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         print("\n" + "="*70)
         print("✓ ALL DATASETS CREATED SUCCESSFULLY!")
         print("="*70)
-        print(f"  Train: {len(train_data):,} graphs")
-        print(f"  Valid: {len(valid_data):,} graphs")
-        print(f"  Test:  {len(test_data):,} graphs")
-        print(f"  Total: {len(train_data) + len(valid_data) + len(test_data):,} graphs")
+        print(f"  Train: {written_train:,} graphs")
+        print(f"  Valid: {written_valid:,} graphs")
+        print(f"  Test:  {written_test:,} graphs")
+        print(f"  Total: {written_train + written_valid + written_test:,} graphs")
+        print(f"  Output directory: {dataset_root}")
         print("="*70)
 
 
