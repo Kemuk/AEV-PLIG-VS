@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "aev-plig"
@@ -51,15 +51,11 @@ aev-plig-train = "scripts.train:main"
 aev-plig-predict = "scripts.predict:main"
 aev-plig-generate-graphs = "scripts.generate_pdbbind_graphs:main"
 
-[tool.setuptools]
-zip-safe = false
+[tool.hatch.build.targets.wheel]
+packages = ["aev_plig", "torchani_mod", "scripts"]
 
-[tool.setuptools.packages.find]
-include = ["aev_plig*", "torchani_mod*", "scripts*"]
-exclude = ["tests*"]
-
-[tool.setuptools.package-data]
-torchani_mod = []
+[tool.hatch.build]
+exclude = ["torchani_mod/resources/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
