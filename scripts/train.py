@@ -167,7 +167,8 @@ def train_ensemble(args):
 
         # Load best model and evaluate on test set
         model.load_state_dict(torch.load(model_save_path))
-        G_test, P_test = trainer.predict(test_loader)
+        pred_out = trainer.predict(test_loader)
+        G_test, P_test = pred_out[:2]
 
         if i == 0:
             df_test = pd.DataFrame(data=G_test, columns=['truth'])
