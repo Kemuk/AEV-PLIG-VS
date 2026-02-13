@@ -15,6 +15,7 @@ __all__ = [
     'GATv2Net',
     'get_model',
     'Config',
+    'results',
 ]
 
 
@@ -28,4 +29,7 @@ def __getattr__(name):
     if name == 'Config':
         from aev_plig.config import Config
         return Config
+    if name == 'results':
+        import importlib
+        return importlib.import_module('aev_plig.results')
     raise AttributeError(f"module 'aev_plig' has no attribute {name!r}")

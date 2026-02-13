@@ -19,6 +19,7 @@ from aev_plig.datasets import create_dataset
 from aev_plig.models import MODEL_REGISTRY
 from aev_plig.config import Config
 import numpy as np
+import polars as pl
 
 # Suppress TorchANI warnings
 warnings.filterwarnings("ignore", message="cuaev not installed")
@@ -188,8 +189,8 @@ def main():
     print("STEP 5: SAVE RESULTS")
     print("="*60 + "\n")
 
-    output_file = f"{Config.PREDICTIONS_DIR}/{config.data_name}_predictions.csv"
-    df.to_csv(output_file, index=False)
+    output_file = f"{Config.PREDICTIONS_DIR}/{config.data_name}_predictions.parquet"
+    pl.from_pandas(df).write_parquet(output_file)
     print(f"Saved predictions to {output_file}")
 
     # ==================== Summary ====================
