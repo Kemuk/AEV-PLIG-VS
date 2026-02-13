@@ -14,7 +14,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 
 from aev_plig.models import (
-    get_model, list_models, MODEL_REGISTRY, GATv2Net,
+    get_model, list_models, MODEL_REGISTRY, BaseGATv2Net, GATv2Net,
     GATv2NetBayesian, GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision,
 )
 from aev_plig.datasets import GraphDataset, init_weights
@@ -225,13 +225,27 @@ class TestMixedPrecisionModelForward:
             y_scaler=None
         )
 
-    def test_mp_model_inherits_base_forward(self):
-        """Test that GATv2NetMixedPrecision inherits GATv2Net.forward."""
-        assert GATv2NetMixedPrecision.forward is GATv2Net.forward
+    def test_base_class_is_abstract(self):
+        """Test that BaseGATv2Net cannot be instantiated directly."""
+        with pytest.raises(TypeError):
+            BaseGATv2Net(node_feature_dim=25, edge_feature_dim=4)
 
-    def test_mp_bayesian_model_inherits_base_forward(self):
-        """Test that GATv2NetBayesianMixedPrecision inherits GATv2NetBayesian.forward."""
+    def test_all_models_inherit_base(self):
+        """Test all model classes inherit from BaseGATv2Net."""
+        assert issubclass(GATv2Net, BaseGATv2Net)
+        assert issubclass(GATv2NetBayesian, BaseGATv2Net)
+        assert issubclass(GATv2NetMixedPrecision, BaseGATv2Net)
+        assert issubclass(GATv2NetBayesianMixedPrecision, BaseGATv2Net)
+
+    def test_mp_models_share_base_forward(self):
+        """Test MP models share forward with their parent (only _gnn_forward differs)."""
+        assert GATv2NetMixedPrecision.forward is GATv2Net.forward
         assert GATv2NetBayesianMixedPrecision.forward is GATv2NetBayesian.forward
+
+    def test_mp_models_override_gnn_forward(self):
+        """Test MP models override _gnn_forward to disable autocast."""
+        assert GATv2NetMixedPrecision._gnn_forward is not GATv2Net._gnn_forward
+        assert GATv2NetBayesianMixedPrecision._gnn_forward is not GATv2NetBayesian._gnn_forward
 
     def test_mp_model_forward_on_cpu(self, mock_config, node_feature_dim, edge_feature_dim, test_dataset, device):
         """Test mixed precision model forward pass works on CPU."""

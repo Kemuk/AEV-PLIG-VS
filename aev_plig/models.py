@@ -7,6 +7,7 @@ This module provides the model architecture and model registry for easy model se
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from abc import ABC, abstractmethod
 from torch_geometric.nn import GATv2Conv
 from torch_geometric.nn import global_max_pool as gmp
 from torch_geometric.nn import global_mean_pool as gap
@@ -21,15 +22,15 @@ ACTIVATION_FUNCTIONS = {
 }
 
 
-class GATv2Net(torch.nn.Module):
+class BaseGATv2Net(torch.nn.Module, ABC):
     """
-    Graph Attention Network v2 for protein-ligand binding affinity prediction.
+    Abstract base class for GATv2-based graph neural network models.
 
     Architecture:
-    - 5 GATv2Conv layers with batch normalization
+    - N GATv2Conv layers with batch normalization
     - Global pooling (concatenation of max and mean pooling)
     - 3 fully connected layers with batch normalization
-    - Output: Single value (predicted binding affinity)
+    - Output head defined by subclasses
 
     Args:
         node_feature_dim: Dimension of node features
@@ -38,12 +39,12 @@ class GATv2Net(torch.nn.Module):
     """
 
     def __init__(self, node_feature_dim, edge_feature_dim, config=None):
-        super(GATv2Net, self).__init__()
+        super().__init__()
 
         # Get configuration parameters
         if config is None:
             config = Config
-        
+
         if hasattr(config, 'activation_function'):
             self.act = config.activation_function
         else:
@@ -87,7 +88,19 @@ class GATv2Net(torch.nn.Module):
         self.bn_connect2 = nn.BatchNorm1d(mlp_dims[1])
         self.fc3 = nn.Linear(mlp_dims[1], mlp_dims[2])
         self.bn_connect3 = nn.BatchNorm1d(mlp_dims[2])
-        self.out = nn.Linear(mlp_dims[2], 1)
+
+    def _gnn_forward(self, x, edge_index, edge_attr):
+        """Run input through GNN layers with batch normalization."""
+        for layer, bn in zip(self.GNN_layers, self.BN_layers):
+            x = layer(x, edge_index, edge_attr)
+            x = self.activation(x)
+            x = bn(x)
+        return x
+
+    @abstractmethod
+    def _output_head(self, x):
+        """Apply the final output head. Subclasses define their output layer(s)."""
+        pass
 
     def forward(self, data):
         """
@@ -97,15 +110,11 @@ class GATv2Net(torch.nn.Module):
             data: PyTorch Geometric Data object with x, edge_index, edge_attr, batch
 
         Returns:
-            torch.Tensor: Predicted binding affinity (shape: [batch_size, 1])
+            Output from the subclass output head
         """
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
 
-        # GNN layers
-        for layer, bn in zip(self.GNN_layers, self.BN_layers):
-            x = layer(x, edge_index, edge_attr)
-            x = self.activation(x)
-            x = bn(x)
+        x = self._gnn_forward(x, edge_index, edge_attr)
 
         # Global pooling (concatenate max and mean pooling)
         x = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
@@ -121,6 +130,27 @@ class GATv2Net(torch.nn.Module):
         x = self.activation(x)
         x = self.bn_connect3(x)
 
+        return self._output_head(x)
+
+    @abstractmethod
+    def predict(self, data):
+        """Return point predictions for inference."""
+        pass
+
+
+class GATv2Net(BaseGATv2Net):
+    """
+    Graph Attention Network v2 for protein-ligand binding affinity prediction.
+
+    Output: Single value (predicted binding affinity)
+    """
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
+        super().__init__(node_feature_dim, edge_feature_dim, config)
+        mlp_dims = Config.MLP_DIMS
+        self.out = nn.Linear(mlp_dims[2], 1)
+
+    def _output_head(self, x):
         return self.out(x)
 
     def predict(self, data):
@@ -128,118 +158,22 @@ class GATv2Net(torch.nn.Module):
         return self.forward(data)
 
 
-class GATv2NetBayesian(torch.nn.Module):
+class GATv2NetBayesian(BaseGATv2Net):
     """
     Bayesian Graph Attention Network v2 for protein-ligand binding affinity prediction.
 
-    Same architecture as GATv2Net but with a Bayesian last layer that outputs
-    both mean and variance for uncertainty quantification.
-
-    Architecture:
-    - 5 GATv2Conv layers with batch normalization
-    - Global pooling (concatenation of max and mean pooling)
-    - 3 fully connected layers with batch normalization
-    - Output: (mean, variance) tuple for predicted binding affinity
-
-    Args:
-        node_feature_dim: Dimension of node features
-        edge_feature_dim: Dimension of edge features
-        config: Configuration object or namespace with model parameters (optional, defaults to Config)
+    Output: (mean, variance) tuple for uncertainty quantification
     """
 
     def __init__(self, node_feature_dim, edge_feature_dim, config=None):
-        super(GATv2NetBayesian, self).__init__()
-
-        # Get configuration parameters
-        if config is None:
-            config = Config
-        
-        if hasattr(config, 'activation_function'):
-            self.act = config.activation_function
-        else:
-            self.act = Config.ACTIVATION_FUNCTION
-
-        if hasattr(config, 'hidden_dim'):
-            hidden_dim = config.hidden_dim
-        else:
-            hidden_dim = Config.HIDDEN_DIM
-
-        if hasattr(config, 'head'):
-            head = config.head
-        else:
-            head = Config.NUM_ATTENTION_HEADS
-
-        self.number_GNN_layers = Config.NUM_GNN_LAYERS
-        self.activation = ACTIVATION_FUNCTIONS[self.act]
-
-        # GNN layers
-        self.GNN_layers = nn.ModuleList()
-        self.BN_layers = nn.ModuleList()
-
-        input_dim = node_feature_dim
-
-        # First GNN layer
-        self.GNN_layers.append(GATv2Conv(input_dim, hidden_dim, heads=head, edge_dim=edge_feature_dim))
-        self.BN_layers.append(BatchNorm(hidden_dim * head))
-
-        # Remaining GNN layers
-        for i in range(1, self.number_GNN_layers):
-            self.GNN_layers.append(GATv2Conv(hidden_dim * head, hidden_dim, heads=head, edge_dim=edge_feature_dim))
-            self.BN_layers.append(BatchNorm(hidden_dim * head))
-
-        final_dim = hidden_dim * head
-
-        # Fully connected layers (MLP)
+        super().__init__(node_feature_dim, edge_feature_dim, config)
         mlp_dims = Config.MLP_DIMS
-        self.fc1 = nn.Linear(final_dim * 2, mlp_dims[0])  # *2 for concatenated pooling
-        self.bn_connect1 = nn.BatchNorm1d(mlp_dims[0])
-        self.fc2 = nn.Linear(mlp_dims[0], mlp_dims[1])
-        self.bn_connect2 = nn.BatchNorm1d(mlp_dims[1])
-        self.fc3 = nn.Linear(mlp_dims[1], mlp_dims[2])
-        self.bn_connect3 = nn.BatchNorm1d(mlp_dims[2])
-
-        # Bayesian output heads
         self.mean_head = nn.Linear(mlp_dims[2], 1)
         self.logvar_head = nn.Linear(mlp_dims[2], 1)
 
-    def forward(self, data):
-        """
-        Forward pass through the network.
-
-        Args:
-            data: PyTorch Geometric Data object with x, edge_index, edge_attr, batch
-
-        Returns:
-            tuple: (mean, variance) tensors, each with shape [batch_size, 1]
-                - mean: Predicted binding affinity
-                - variance: Predicted uncertainty (always positive)
-        """
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-
-        # GNN layers
-        for layer, bn in zip(self.GNN_layers, self.BN_layers):
-            x = layer(x, edge_index, edge_attr)
-            x = self.activation(x)
-            x = bn(x)
-
-        # Global pooling (concatenate max and mean pooling)
-        x = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-
-        # Fully connected layers
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.bn_connect1(x)
-        x = self.fc2(x)
-        x = self.activation(x)
-        x = self.bn_connect2(x)
-        x = self.fc3(x)
-        x = self.activation(x)
-        x = self.bn_connect3(x)
-
-        # Bayesian output: mean and variance
+    def _output_head(self, x):
         mean = self.mean_head(x)
-        var = F.softplus(self.logvar_head(x)) + 1e-6  # Ensure variance is positive
-
+        var = F.softplus(self.logvar_head(x)) + 1e-6
         return mean, var
 
     def predict(self, data):
@@ -250,24 +184,30 @@ class GATv2NetBayesian(torch.nn.Module):
 
 class GATv2NetMixedPrecision(GATv2Net):
     """
-    Graph Attention Network v2 for mixed precision training.
+    Mixed precision GATv2Net.
 
-    Identical architecture to GATv2Net. Mixed precision (AMP) is handled by
-    the Trainer class, which auto-detects this model and enables
-    torch.amp.autocast + GradScaler at the training-loop level.
+    Overrides _gnn_forward to disable autocast for GNN layers, avoiding
+    CUBLAS errors from fp16 lin_edge with small edge dimensions on V100.
+    MLP layers still run under the Trainer's autocast context (fp16).
     """
-    pass
+
+    def _gnn_forward(self, x, edge_index, edge_attr):
+        with torch.amp.autocast('cuda', enabled=False):
+            return super()._gnn_forward(x.float(), edge_index, edge_attr.float())
 
 
 class GATv2NetBayesianMixedPrecision(GATv2NetBayesian):
     """
-    Bayesian Graph Attention Network v2 for mixed precision training.
+    Mixed precision Bayesian GATv2Net.
 
-    Identical architecture to GATv2NetBayesian. Mixed precision (AMP) is handled
-    by the Trainer class, which auto-detects this model and enables
-    torch.amp.autocast + GradScaler at the training-loop level.
+    Overrides _gnn_forward to disable autocast for GNN layers, avoiding
+    CUBLAS errors from fp16 lin_edge with small edge dimensions on V100.
+    MLP layers still run under the Trainer's autocast context (fp16).
     """
-    pass
+
+    def _gnn_forward(self, x, edge_index, edge_attr):
+        with torch.amp.autocast('cuda', enabled=False):
+            return super()._gnn_forward(x.float(), edge_index, edge_attr.float())
 
 
 # Model registry for easy model selection
@@ -296,11 +236,11 @@ def get_model(name, **kwargs):
 
     Raises:
         KeyError: If model name is not in registry
-    
+
     Example:
         >>> # Create model with default config
         >>> model = get_model('GATv2Net', node_feature_dim=25, edge_feature_dim=4)
-        >>> 
+        >>>
         >>> # Create model with custom config
         >>> class CustomConfig:
         ...     hidden_dim = 128
