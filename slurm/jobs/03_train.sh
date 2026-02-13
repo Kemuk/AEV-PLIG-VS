@@ -7,9 +7,13 @@
 # are saved to: output/trained_models/{model}_{timestamp}/
 #
 # Usage:
-#   ./slurm/jobs/03_train.sh
+#   ./slurm/jobs/03_train.sh [--model MODEL_NAME] [--dataset DATASET_NAME]
 #
-# Configuration is loaded from slurm/config.sh
+# Options:
+#   --model MODELNAME       Override model from config (e.g., GATv2NetMixedPrecision)
+#   --dataset DATASETNAME   Override dataset from config
+#
+# If no arguments provided, uses defaults from slurm/config.sh
 # =============================================================================
 set -euo pipefail
 
@@ -20,9 +24,24 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Load configuration
 source "$PROJECT_ROOT/slurm/config.sh"
 
-# Training configuration
+# Parse command-line arguments
 MODEL="${MODEL_NAME}"
 DATASET="${DATASET_NAME}"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
+        --dataset)
+            DATASET="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
 
 # Hyperparameters (matching original training command)
 ACTIVATION="leaky_relu"
@@ -33,11 +52,11 @@ HIDDEN_DIM=256
 LR=0.00012291937615434127
 
 # SLURM settings
-PARTITION="${PARTITION_LONG}"
-TIME_LIMIT="24:00:00"
+PARTITION="${PARTITION_SHORT}"
+TIME_LIMIT="02:00:00"
 MEM="${MEM_STANDARD}"
 CPUS="${CPUS_STANDARD}"
-GPUS=1
+GPUS="v100:1"
 
 # Ensemble seeds from config.py
 SEEDS=(100 123 15 257 2 2012 3752 350 843 621)
