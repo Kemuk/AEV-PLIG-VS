@@ -34,7 +34,6 @@ LOG_DIR="$PROJECT_ROOT/logs"
 
 # ======================== Environment Setup ========================
 module load Anaconda3
-module load CUDA
 
 # Isolate conda env from user-site packages (~/.local)
 export PYTHONNOUSERSITE=1
