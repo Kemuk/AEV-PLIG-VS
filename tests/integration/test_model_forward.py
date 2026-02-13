@@ -13,7 +13,10 @@ import shutil
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 
-from aev_plig.models import get_model, list_models, MODEL_REGISTRY, GATv2Net
+from aev_plig.models import (
+    get_model, list_models, MODEL_REGISTRY, GATv2Net,
+    GATv2NetBayesian, GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision,
+)
 from aev_plig.datasets import GraphDataset, init_weights
 
 
@@ -196,3 +199,79 @@ class TestModelForward:
             output2 = model2(batch)
 
         torch.testing.assert_close(output1, output2)
+
+
+@pytest.mark.integration
+class TestMixedPrecisionModelForward:
+    """Test mixed precision model forward pass (CPU-safe)."""
+
+    @pytest.fixture
+    def temp_data_dir(self):
+        """Create a temporary directory for test data."""
+        temp_dir = tempfile.mkdtemp()
+        yield temp_dir
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def test_dataset(self, sample_graphs_dict, sample_labels, temp_data_dir):
+        """Create a test dataset."""
+        ids = list(sample_graphs_dict.keys())
+        return GraphDataset(
+            root=temp_data_dir,
+            dataset='test_mp_model',
+            ids=ids,
+            y=sample_labels,
+            graphs_dict=sample_graphs_dict,
+            y_scaler=None
+        )
+
+    def test_mp_model_inherits_base_forward(self):
+        """Test that GATv2NetMixedPrecision inherits GATv2Net.forward."""
+        assert GATv2NetMixedPrecision.forward is GATv2Net.forward
+
+    def test_mp_bayesian_model_inherits_base_forward(self):
+        """Test that GATv2NetBayesianMixedPrecision inherits GATv2NetBayesian.forward."""
+        assert GATv2NetBayesianMixedPrecision.forward is GATv2NetBayesian.forward
+
+    def test_mp_model_forward_on_cpu(self, mock_config, node_feature_dim, edge_feature_dim, test_dataset, device):
+        """Test mixed precision model forward pass works on CPU."""
+        model = get_model(
+            'GATv2NetMixedPrecision',
+            node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
+            config=mock_config
+        )
+        model.to(device)
+        model.eval()
+
+        loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+        batch = next(iter(loader)).to(device)
+
+        with torch.no_grad():
+            output = model(batch)
+
+        assert output.shape == (1, 1)
+        assert not torch.isnan(output).any()
+
+    def test_mp_bayesian_model_forward_on_cpu(self, mock_config, node_feature_dim, edge_feature_dim, test_dataset, device):
+        """Test mixed precision Bayesian model forward pass on CPU."""
+        model = get_model(
+            'GATv2NetBayesianMixedPrecision',
+            node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
+            config=mock_config
+        )
+        model.to(device)
+        model.eval()
+
+        loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+        batch = next(iter(loader)).to(device)
+
+        with torch.no_grad():
+            output = model(batch)
+
+        assert isinstance(output, tuple)
+        mean, var = output
+        assert mean.shape == (1, 1)
+        assert var.shape == (1, 1)
+        assert (var > 0).all()

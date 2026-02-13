@@ -239,3 +239,99 @@ class TestTrainer:
         assert isinstance(y_true, np.ndarray)
         assert isinstance(y_pred, np.ndarray)
         assert len(y_true) == len(y_pred)
+
+
+@pytest.mark.integration
+class TestTrainerMixedPrecision:
+    """Test Trainer with AMP support (CPU-safe, verifies code paths)."""
+
+    @pytest.fixture
+    def temp_data_dir(self):
+        temp_dir = tempfile.mkdtemp()
+        yield temp_dir
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def train_dataset(self, sample_graphs_dict, sample_labels, temp_data_dir):
+        ids = list(sample_graphs_dict.keys())
+        return GraphDataset(
+            root=temp_data_dir,
+            dataset='train_amp',
+            ids=ids,
+            y=sample_labels,
+            graphs_dict=sample_graphs_dict,
+            y_scaler=None
+        )
+
+    @pytest.fixture
+    def amp_trainer(self, mock_config, train_dataset, device):
+        """Create a Trainer with a mixed precision model on CPU."""
+        model = get_model(
+            'GATv2NetMixedPrecision',
+            node_feature_dim=train_dataset.num_node_features,
+            edge_feature_dim=train_dataset.num_edge_features,
+            config=mock_config
+        )
+        model.apply(init_weights)
+
+        train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+        valid_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+
+        return Trainer(
+            model=model,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+            device=device,
+            y_scaler=train_dataset.y_scaler,
+            learning_rate=0.001,
+        )
+
+    def test_amp_auto_detected_false_on_cpu(self, amp_trainer):
+        """On CPU, use_amp should be False even for mixed precision models."""
+        assert amp_trainer.use_amp is False
+
+    def test_amp_trainer_train_epoch(self, amp_trainer):
+        """Test train_epoch works with AMP trainer on CPU."""
+        loss = amp_trainer.train_epoch(epoch=1, log_interval=1000)
+        assert isinstance(loss, float)
+        assert loss >= 0
+
+    def test_amp_trainer_validate(self, amp_trainer):
+        """Test validate works with AMP trainer on CPU."""
+        y_true, y_pred = amp_trainer.validate()
+        assert isinstance(y_true, np.ndarray)
+        assert isinstance(y_pred, np.ndarray)
+        assert len(y_true) == len(y_pred)
+
+    def test_amp_trainer_fit(self, amp_trainer, temp_data_dir):
+        """Test fit with AMP trainer creates checkpoint."""
+        model_path = os.path.join(temp_data_dir, 'test_amp_model.pt')
+        history = amp_trainer.fit(n_epochs=2, model_save_path=model_path)
+
+        assert os.path.exists(model_path)
+        assert len(history['train_loss']) == 2
+
+    def test_explicit_use_amp_override(self, mock_config, train_dataset, device):
+        """Test that explicit use_amp=False overrides auto-detection."""
+        model = get_model(
+            'GATv2NetMixedPrecision',
+            node_feature_dim=train_dataset.num_node_features,
+            edge_feature_dim=train_dataset.num_edge_features,
+            config=mock_config
+        )
+        model.apply(init_weights)
+
+        train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+        valid_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+
+        trainer = Trainer(
+            model=model,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+            device=device,
+            y_scaler=train_dataset.y_scaler,
+            learning_rate=0.001,
+            use_amp=False,
+        )
+
+        assert trainer.use_amp is False

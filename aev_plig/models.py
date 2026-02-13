@@ -250,98 +250,24 @@ class GATv2NetBayesian(torch.nn.Module):
 
 class GATv2NetMixedPrecision(GATv2Net):
     """
-    Graph Attention Network v2 with mixed precision training.
+    Graph Attention Network v2 for mixed precision training.
 
-    Same architecture as GATv2Net but uses torch.cuda.amp.autocast for efficient
-    mixed precision training on GPUs.
+    Identical architecture to GATv2Net. Mixed precision (AMP) is handled by
+    the Trainer class, which auto-detects this model and enables
+    torch.amp.autocast + GradScaler at the training-loop level.
     """
-
-    def forward(self, data):
-        """
-        Forward pass with automatic mixed precision.
-
-        Args:
-            data: PyTorch Geometric Data object with x, edge_index, edge_attr, batch
-
-        Returns:
-            torch.Tensor: Predicted binding affinity (shape: [batch_size, 1])
-        """
-        with torch.cuda.amp.autocast(dtype=torch.float16):
-            x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-
-            # GNN layers
-            for layer, bn in zip(self.GNN_layers, self.BN_layers):
-                x = layer(x, edge_index, edge_attr)
-                x = self.activation(x)
-                x = bn(x)
-
-            # Global pooling (concatenate max and mean pooling)
-            x = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-
-            # Fully connected layers
-            x = self.fc1(x)
-            x = self.activation(x)
-            x = self.bn_connect1(x)
-            x = self.fc2(x)
-            x = self.activation(x)
-            x = self.bn_connect2(x)
-            x = self.fc3(x)
-            x = self.activation(x)
-            x = self.bn_connect3(x)
-
-            x = self.out(x)
-
-        return x
+    pass
 
 
 class GATv2NetBayesianMixedPrecision(GATv2NetBayesian):
     """
-    Bayesian Graph Attention Network v2 with mixed precision training.
+    Bayesian Graph Attention Network v2 for mixed precision training.
 
-    Same architecture as GATv2NetBayesian but uses torch.cuda.amp.autocast for efficient
-    mixed precision training on GPUs.
+    Identical architecture to GATv2NetBayesian. Mixed precision (AMP) is handled
+    by the Trainer class, which auto-detects this model and enables
+    torch.amp.autocast + GradScaler at the training-loop level.
     """
-
-    def forward(self, data):
-        """
-        Forward pass with automatic mixed precision.
-
-        Args:
-            data: PyTorch Geometric Data object with x, edge_index, edge_attr, batch
-
-        Returns:
-            tuple: (mean, variance) tensors, each with shape [batch_size, 1]
-                - mean: Predicted binding affinity
-                - variance: Predicted uncertainty (always positive)
-        """
-        with torch.cuda.amp.autocast(dtype=torch.float16):
-            x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-
-            # GNN layers
-            for layer, bn in zip(self.GNN_layers, self.BN_layers):
-                x = layer(x, edge_index, edge_attr)
-                x = self.activation(x)
-                x = bn(x)
-
-            # Global pooling (concatenate max and mean pooling)
-            x = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-
-            # Fully connected layers
-            x = self.fc1(x)
-            x = self.activation(x)
-            x = self.bn_connect1(x)
-            x = self.fc2(x)
-            x = self.activation(x)
-            x = self.bn_connect2(x)
-            x = self.fc3(x)
-            x = self.activation(x)
-            x = self.bn_connect3(x)
-
-            # Bayesian output: mean and variance
-            mean = self.mean_head(x)
-            var = F.softplus(self.logvar_head(x)) + 1e-6  # Ensure variance is positive
-
-        return mean, var
+    pass
 
 
 # Model registry for easy model selection

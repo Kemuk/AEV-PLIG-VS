@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import pickle
 import torch
+from torch.amp import autocast
 from tqdm import tqdm
 from rdkit import Chem
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -17,6 +18,7 @@ from functools import partial
 from aev_plig.loaders import load_ligand_atoms, load_protein_atoms_biopandas, compute_aevs
 from aev_plig.graphs import create_graph
 from aev_plig.config import Config
+from aev_plig.models import GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision
 from torch_geometric.loader import DataLoader
 
 
@@ -297,12 +299,18 @@ class Predictor:
         self.model_paths = model_paths
         self.device = device
         self.config = config
+        self.use_amp = (
+            issubclass(model_class, (GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision))
+            and device.type == 'cuda'
+        )
 
         # Load scaler
         with open(scaler_path, 'rb') as f:
             self.scaler = pickle.load(f)
 
         print(f"Loaded {len(model_paths)} model checkpoints")
+        if self.use_amp:
+            print("Mixed precision inference enabled (AMP)")
 
     def predict(self, dataset):
         """
@@ -339,7 +347,8 @@ class Predictor:
             with torch.no_grad():
                 for data in loader:
                     data = data.to(self.device)
-                    output = model.predict(data)
+                    with autocast('cuda', enabled=self.use_amp):
+                        output = model.predict(data)
                     total_preds = torch.cat((total_preds, output), 0)
                     total_graph_ids = torch.cat((total_graph_ids, data.y.view(-1, 1)), 0)
 
