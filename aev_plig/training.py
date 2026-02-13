@@ -8,8 +8,10 @@ binding affinity prediction models.
 import torch
 import torch.nn as nn
 import numpy as np
+from torch.amp import autocast, GradScaler
 from torch_geometric.loader import DataLoader
 from aev_plig.config import Config
+from aev_plig.models import GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision
 from math import sqrt
 from scipy import stats
 
@@ -146,7 +148,8 @@ class Trainer:
     """
 
     def __init__(self, model, train_loader, valid_loader, device, y_scaler,
-                 optimizer=None, loss_fn=None, learning_rate=None, weight_decay=None):
+                 optimizer=None, loss_fn=None, learning_rate=None, weight_decay=None,
+                 use_amp=None):
         self.model = model
         self.train_loader = train_loader
         self.valid_loader = valid_loader
@@ -174,6 +177,15 @@ class Trainer:
         else:
             self.loss_fn = loss_fn
 
+        # Mixed precision training setup
+        if use_amp is None:
+            use_amp = isinstance(model, (GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision))
+        self.use_amp = use_amp and device.type == 'cuda'
+        self.scaler = GradScaler('cuda', enabled=self.use_amp)
+
+        if self.use_amp:
+            print("Mixed precision training enabled (AMP + GradScaler)")
+
         # Training state
         self.best_pc = -1.1  # Best Pearson correlation
         self.pcs = []  # History of Pearson correlations
@@ -198,18 +210,21 @@ class Trainer:
         for batch_idx, data in enumerate(self.train_loader):
             data = data.to(self.device)
             self.optimizer.zero_grad()
-            output = self.model(data)
-            target = data.y.view(-1, 1).to(self.device)
 
-            # Auto-detect Bayesian model (returns tuple)
-            if isinstance(output, tuple):
-                mean, var = output
-                loss = gaussian_nll_loss(mean, var, target)
-            else:
-                loss = self.loss_fn(output, target)
+            with autocast('cuda', enabled=self.use_amp):
+                output = self.model(data)
+                target = data.y.view(-1, 1).to(self.device)
 
-            loss.backward()
-            self.optimizer.step()
+                # Auto-detect Bayesian model (returns tuple)
+                if isinstance(output, tuple):
+                    mean, var = output
+                    loss = gaussian_nll_loss(mean, var, target)
+                else:
+                    loss = self.loss_fn(output, target)
+
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             total_loss += (loss.item() * len(data.y))
 
             if batch_idx % log_interval == 0:
@@ -242,7 +257,9 @@ class Trainer:
         with torch.no_grad():
             for data in self.valid_loader:
                 data = data.to(self.device)
-                output = self.model(data)
+
+                with autocast('cuda', enabled=self.use_amp):
+                    output = self.model(data)
 
                 # Auto-detect Bayesian model (returns tuple)
                 if isinstance(output, tuple):
@@ -341,7 +358,9 @@ class Trainer:
         with torch.no_grad():
             for data in test_loader:
                 data = data.to(self.device)
-                output = self.model(data)
+
+                with autocast('cuda', enabled=self.use_amp):
+                    output = self.model(data)
 
                 # Auto-detect Bayesian model (returns tuple)
                 if isinstance(output, tuple):
