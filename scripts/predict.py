@@ -220,7 +220,7 @@ def load_processed_data(config):
     all_data = []
     for part_file in tqdm(manifest['parts'], desc="Loading chunks"):
         part_path = split_dir / part_file
-        data_chunk = torch.load(part_path)
+        data_chunk = torch.load(part_path, weights_only=False)
         all_data.extend(data_chunk)
 
     print(f"✓ Loaded {len(all_data)} graphs\n")
