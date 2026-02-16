@@ -6,6 +6,7 @@ and makes predictions using an ensemble of trained models.
 """
 
 import argparse
+import json
 import os
 import pickle
 import sys
@@ -17,6 +18,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import torch
+from tqdm import tqdm
 
 from aev_plig.config import Config
 from aev_plig.datasets import create_dataset
@@ -37,10 +39,12 @@ def parse_args():
     parser.add_argument('--trained_model_name', type=str,
                         default='model_GATv2Net_ligsim90_fep_benchmark',
                         help='Trained model name (without extension)')
-    parser.add_argument('--dataset_csv', type=str, default='data/example_dataset.csv',
-                        help='Path to dataset CSV file')
+    parser.add_argument('--dataset_csv', type=str, default=None,
+                        help='Path to dataset CSV file (optional - if not provided, loads from processed data)')
     parser.add_argument('--data_name', type=str, default='example',
                         help='Name for output files')
+    parser.add_argument('--use_processed', action='store_true',
+                        help='Force loading from processed data directory (ignores dataset_csv)')
     parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension')
     parser.add_argument('--head', type=int, default=3, help='Number of attention heads')
     parser.add_argument('--activation_function', type=str, default='leaky_relu',
@@ -69,10 +73,16 @@ def get_device(device_param):
         return torch.device(f"cuda:{device_param}")
 
 
-def main():
-    """Main prediction pipeline."""
-    config = parse_args()
+def setup_environment(config):
+    """
+    Configure environment settings for prediction.
 
+    Args:
+        config: Parsed command line arguments
+
+    Returns:
+        None (modifies config in-place)
+    """
     # Set up multiprocessing
     if config.num_workers <= 0:
         config.num_workers = os.cpu_count()
@@ -82,9 +92,30 @@ def main():
 
     # Configure device
     config.device = get_device(config.device)
-    print(f"Using device: {config.device}")
+    print(f"Using device: {config.device}\n")
 
-    # ==================== Step 1: Validate Data ====================
+
+def validate_and_process_csv(config):
+    """
+    Validate data, generate graphs, and create PyTorch dataset from CSV.
+
+    This function handles Steps 1-3 of the CSV mode pipeline:
+    - Validate ligands and proteins
+    - Generate molecular graphs
+    - Create PyTorch Geometric datasets
+
+    Args:
+        config: Configuration object with dataset_csv, num_workers, etc.
+
+    Returns:
+        tuple: (test_data, df, graph_time)
+            - test_data: List of PyTorch Geometric Data objects
+            - df: Pandas DataFrame with processed data
+            - graph_time: Time taken for graph generation (seconds)
+    """
+    start_time = time.time()
+
+    # Step 1: Validate Data
     print("\n" + "="*60)
     print("STEP 1: VALIDATE DATA")
     print("="*60 + "\n")
@@ -94,42 +125,28 @@ def main():
     atom_keys["RESIDUE"] = atom_keys["PDB_ATOM"].apply(lambda x: x.split("-")[0])
 
     validator = Validator(atom_keys=atom_keys, skip_protein_validation=config.skip_validation)
-
-    # Validate ligands
     df = validator.validate_ligands(df)
-
-    # Validate proteins (if not skipped)
     df = validator.validate_proteins(df, num_workers=config.num_workers)
-
-    # Analyse features and remove problematic molecules
     df = validator.analyze_features(df)
 
-    # Check if we have any valid data left
     if len(df) == 0:
-        print("ERROR: No valid molecules remaining after validation!")
-        sys.exit(1)
+        raise ValueError("No valid molecules remaining after validation!")
 
     # Save processed dataset
     processed_csv = config.dataset_csv.replace('.csv', '_processed.csv')
     df.to_csv(processed_csv, index=False)
     print(f"Saved processed dataset to {processed_csv}\n")
 
-    # ==================== Step 2: Generate Graphs ====================
+    # Step 2: Generate Graphs
     print("\n" + "="*60)
     print("STEP 2: GENERATE MOLECULAR GRAPHS")
     print("="*60 + "\n")
 
-    start_time = time.time()
-
-    # Prepare atom map
     atom_map = pd.DataFrame(pd.unique(atom_keys["ATOM_TYPE"]))
     atom_map[1] = list(np.arange(len(atom_map)) + 1)
     atom_map = atom_map.rename(columns={0: "ATOM_TYPE", 1: "ATOM_NR"})
 
-    # Get radial coefficients
     radial_coefs = Config.get_radial_coefs()
-
-    # Create graph processor and process all complexes
     processor = GraphProcessor(atom_keys, atom_map, radial_coefs)
     mol_graphs = processor.process_batch(df, num_workers=config.num_workers)
 
@@ -141,7 +158,7 @@ def main():
     graph_time = time.time() - start_time
     print(f"\nGraph generation time: {graph_time:.2f} seconds\n")
 
-    # ==================== Step 3: Create PyTorch Dataset ====================
+    # Step 3: Create PyTorch Dataset
     print("\n" + "="*60)
     print("STEP 3: CREATE PYTORCH DATASET")
     print("="*60 + "\n")
@@ -157,9 +174,77 @@ def main():
         scale=False,
     )
 
-    # ==================== Step 4: Make Predictions ====================
+    return test_data, df, graph_time
+
+
+def load_processed_data(config):
+    """
+    Load PyTorch dataset from processed data directory.
+
+    Args:
+        config: Configuration object with data_name
+
+    Returns:
+        tuple: (test_data, df)
+            - test_data: List of PyTorch Geometric Data objects
+            - df: Minimal DataFrame with graph_id column for output
+    """
+    data_name = config.data_name
+    split = 'test'
+
+    dataset_dir = Path(Config.PROCESSED_DATA_DIR) / data_name
+    split_dir = dataset_dir / split
+    manifest_path = split_dir / "manifest.json"
+
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"No processed data found at {split_dir}\n"
+            f"Run create_pytorch_data.py first to generate processed datasets."
+        )
+
+    # Check if scaler exists (needed for predictions)
+    scaler_path = dataset_dir / "scaler.pickle"
+    if not scaler_path.exists():
+        print(f"⚠️  Warning: No scaler found at {scaler_path}")
+        print("   Predictions may not be properly denormalized.")
+
+    # Load manifest
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+
+    print(f"Loading processed dataset: {data_name}/{split}")
+    print(f"  Chunks: {len(manifest['parts'])}")
+    print(f"  Graphs: {manifest['num_graphs_written']}")
+
+    # Load all parts
+    all_data = []
+    for part_file in tqdm(manifest['parts'], desc="Loading chunks"):
+        part_path = split_dir / part_file
+        data_chunk = torch.load(part_path)
+        all_data.extend(data_chunk)
+
+    print(f"✓ Loaded {len(all_data)} graphs\n")
+
+    # Create minimal dataframe for output
+    df = pd.DataFrame({'graph_id': list(range(len(all_data)))})
+
+    return all_data, df
+
+
+def run_predictions(test_data, df, config):
+    """
+    Make predictions using ensemble of trained models.
+
+    Args:
+        test_data: List of PyTorch Geometric Data objects
+        df: DataFrame to merge predictions with
+        config: Configuration object with model settings
+
+    Returns:
+        pd.DataFrame: DataFrame with predictions merged
+    """
     print("\n" + "="*60)
-    print("STEP 4: MAKE PREDICTIONS")
+    print("STEP: MAKE PREDICTIONS")
     print("="*60 + "\n")
 
     # Restore multi-threading for prediction
@@ -168,13 +253,10 @@ def main():
     torch.set_num_threads(config.num_workers)
 
     model_dir = f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}'
-    print(model_dir)
-    # Get model paths (ensemble of 10 models)
-    model_paths = sorted(
-        str(p) for p in Path(model_dir).glob("*.model")
-    )
+    print(f"Model directory: {model_dir}")
 
-    # Load scaler
+    # Get model paths (ensemble of 10 models)
+    model_paths = sorted(str(p) for p in Path(model_dir).glob("*.model"))
     scaler_path = f'{model_dir}/scaler.pickle'
 
     # Create predictor
@@ -192,24 +274,74 @@ def main():
     # Merge predictions with original data
     df = df.merge(df_preds, on='graph_id', how='left')
 
-    # ==================== Step 5: Save Results ====================
+    return df
+
+
+def save_results(df, config, total_time, graph_time=None):
+    """
+    Save predictions and print summary.
+
+    Args:
+        df: DataFrame with predictions
+        config: Configuration object with output settings
+        total_time: Total pipeline time in seconds
+        graph_time: Graph generation time in seconds (None for processed mode)
+    """
     print("\n" + "="*60)
-    print("STEP 5: SAVE RESULTS")
+    print("STEP: SAVE RESULTS")
     print("="*60 + "\n")
 
     output_file = f"{Config.PREDICTIONS_DIR}/{config.data_name}_predictions.parquet"
     pl.from_pandas(df).write_parquet(output_file)
     print(f"Saved predictions to {output_file}")
 
-    # ==================== Summary ====================
-    total_time = time.time() - start_time
+    # Print summary
     print("\n" + "="*60)
     print("SUMMARY")
     print("="*60)
     print(f"Total complexes processed: {len(df)}")
-    print(f"Graph generation time: {graph_time:.2f} seconds")
+    if graph_time is not None:
+        print(f"Graph generation time: {graph_time:.2f} seconds")
     print(f"Total pipeline time: {total_time:.2f} seconds")
     print("="*60 + "\n")
+
+
+def main():
+    """Main prediction pipeline orchestrator."""
+    start_time = time.time()
+
+    # Parse arguments
+    config = parse_args()
+
+    # Setup environment
+    setup_environment(config)
+
+    # ==================== DETERMINE MODE ====================
+    use_processed = config.use_processed or config.dataset_csv is None
+
+    if use_processed:
+        # ==================== PROCESSED DATA MODE ====================
+        print("\n" + "="*60)
+        print("MODE: LOADING FROM PROCESSED DATA")
+        print("="*60 + "\n")
+
+        test_data, df = load_processed_data(config)
+        graph_time = None  # No graph generation in this mode
+
+    else:
+        # ==================== CSV MODE ====================
+        print("\n" + "="*60)
+        print("MODE: PROCESSING NEW DATA FROM CSV")
+        print("="*60 + "\n")
+
+        test_data, df, graph_time = validate_and_process_csv(config)
+
+    # ==================== RUN PREDICTIONS ====================
+    df = run_predictions(test_data, df, config)
+
+    # ==================== SAVE RESULTS ====================
+    total_time = time.time() - start_time
+    save_results(df, config, total_time, graph_time)
 
 
 if __name__ == "__main__":
