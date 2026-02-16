@@ -20,6 +20,7 @@ from aev_plig.models import MODEL_REGISTRY
 from aev_plig.config import Config
 import numpy as np
 import polars as pl
+from pathlib import Path
 
 # Suppress TorchANI warnings
 warnings.filterwarnings("ignore", message="cuaev not installed")
@@ -160,15 +161,17 @@ def main():
     os.environ["MKL_NUM_THREADS"] = str(config.num_workers)
     torch.set_num_threads(config.num_workers)
 
+    model_dir = f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}'
+    print(model_dir)
     # Get model paths (ensemble of 10 models)
-    model_paths = [
-        f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}_{i}.model'
-        for i in range(Config.ENSEMBLE_SIZE)
-    ]
+    model_paths = sorted(
+        str(p) for p in Path(model_dir).glob("*.model")
+    )
 
+    
     # Load scaler
-    scaler_path = f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}.pickle'
-
+    scaler_path = f'{model_dir}/scaler.pickle'
+    
     # Create predictor
     predictor = Predictor(
         model_class=MODEL_REGISTRY[config.model],
