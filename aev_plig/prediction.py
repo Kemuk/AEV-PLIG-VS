@@ -6,20 +6,21 @@ and making predictions on new protein-ligand complexes.
 """
 
 import os
-import pandas as pd
 import pickle
+
+import pandas as pd
 import torch
-from torch.amp import autocast
-from tqdm import tqdm
-from rdkit import Chem
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
-
-from aev_plig.loaders import load_ligand_atoms, load_protein_atoms_biopandas, compute_aevs
-from aev_plig.graphs import create_graph
-from aev_plig.config import Config
-from aev_plig.models import GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision
+from rdkit import Chem
+from torch.amp import autocast
 from torch_geometric.loader import DataLoader
+from tqdm import tqdm
+
+from aev_plig.config import Config
+from aev_plig.graphs import create_graph
+from aev_plig.loaders import compute_aevs, load_ligand_atoms, load_protein_atoms_biopandas
+from aev_plig.models import GATv2NetBayesianMixedPrecision, GATv2NetMixedPrecision
 
 
 class Validator:
@@ -134,7 +135,10 @@ class Validator:
 
     def analyze_features(self, df):
         """
-        Analyze atom features and bond types in the dataset.
+        Analyse atom features and bond types in the dataset.
+
+        Combines atom and edge analysis into a single pass over the data
+        to avoid reading each SDF file twice.
 
         Args:
             df: DataFrame with 'sdf_file' column
@@ -142,51 +146,35 @@ class Validator:
         Returns:
             pd.DataFrame: Filtered DataFrame (removes molecules with unspecified bond types)
         """
-        print("Analyze atom features\n")
+        print("Analyse atom features and edges\n")
+
         features = []
-
-        for index, row in tqdm(df.iterrows(), total=df.shape[0]):
-            suppl = Chem.SDMolSupplier(row["sdf_file"], removeHs=False)
-            lig = suppl[0]
-
-            for atom in lig.GetAtoms():
-                if atom.GetSymbol() != "H":
-                    feature = []
-                    feature.append(atom.GetSymbol())
-                    feature.append(len([x.GetSymbol() for x in atom.GetNeighbors() if x.GetSymbol() != "H"]))
-                    feature.append(len([x.GetSymbol() for x in atom.GetNeighbors() if x.GetSymbol() == "H"]))
-                    feature.append(atom.GetExplicitValence())
-                    feature.append(1 if atom.GetIsAromatic() else 0)
-                    feature.append(1 if atom.IsInRing() else 0)
-                    features.append(feature)
-
-        features_df = pd.DataFrame(features, columns=[
-            "atom_symbol", "num_heavy_atoms", "total_num_Hs",
-            "explicit_valence", "is_aromatic", "is_in_ring"
-        ])
-
-        print(features_df["atom_symbol"].value_counts())
-        print(features_df["num_heavy_atoms"].value_counts())
-        print(features_df["total_num_Hs"].value_counts())
-        print(features_df["explicit_valence"].value_counts())
-        print(features_df["is_aromatic"].value_counts())
-        print(features_df["is_in_ring"].value_counts())
-        print()
-
-        # Edge analysis
-        print("Edge analysis\n")
         bond_types = []
         unspecified_bond_mol = []
 
+        # Single pass over all molecules (instead of two separate loops)
         for index, row in tqdm(df.iterrows(), total=df.shape[0]):
             suppl = Chem.SDMolSupplier(row["sdf_file"], removeHs=False)
             lig = suppl[0]
 
-            heavy_atom_index = []
+            heavy_atom_index = set()  # Use set for O(1) membership test
+
+            # Atom analysis
             for atom in lig.GetAtoms():
                 if atom.GetSymbol() != "H":
-                    heavy_atom_index.append(atom.GetIdx())
+                    heavy_atom_index.add(atom.GetIdx())
 
+                    neighbors = atom.GetNeighbors()
+                    features.append([
+                        atom.GetSymbol(),
+                        sum(1 for x in neighbors if x.GetSymbol() != "H"),
+                        sum(1 for x in neighbors if x.GetSymbol() == "H"),
+                        atom.GetExplicitValence(),
+                        1 if atom.GetIsAromatic() else 0,
+                        1 if atom.IsInRing() else 0,
+                    ])
+
+            # Edge analysis (same loop iteration, reuse heavy_atom_index)
             for bond in lig.GetBonds():
                 idx1 = bond.GetBeginAtomIdx()
                 idx2 = bond.GetEndAtomIdx()
@@ -195,6 +183,23 @@ class Validator:
                     if bond.GetBondType() == 0:
                         unspecified_bond_mol.append(row["unique_id"])
 
+        # Print atom feature statistics
+        features_df = pd.DataFrame(features, columns=[
+            "atom_symbol", "num_heavy_atoms", "total_num_Hs",
+            "explicit_valence", "is_aromatic", "is_in_ring"
+        ])
+
+        print("Atom features:")
+        print(features_df["atom_symbol"].value_counts())
+        print(features_df["num_heavy_atoms"].value_counts())
+        print(features_df["total_num_Hs"].value_counts())
+        print(features_df["explicit_valence"].value_counts())
+        print(features_df["is_aromatic"].value_counts())
+        print(features_df["is_in_ring"].value_counts())
+        print()
+
+        # Print edge statistics
+        print("Edge analysis:")
         bond_df = pd.DataFrame(data={"bond_type": bond_types})
         print(bond_df["bond_type"].value_counts())
         print("Number of molecules with unspecified bond types:", len(unspecified_bond_mol))
@@ -324,9 +329,13 @@ class Predictor:
         """
         print("Making predictions\n")
 
+        if len(dataset) == 0:
+            print("Warning: Empty dataset, returning empty predictions")
+            return pd.DataFrame({"graph_id": [], "preds": []})
+
         loader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
 
-        # Initialize model architecture
+        # Initialise model architecture
         model = self.model_class(
             node_feature_dim=dataset[0].x.shape[1],
             edge_feature_dim=dataset[0].edge_attr.shape[1],
@@ -352,7 +361,7 @@ class Predictor:
                     total_preds = torch.cat((total_preds, output), 0)
                     total_graph_ids = torch.cat((total_graph_ids, data.y.view(-1, 1)), 0)
 
-            # Denormalize predictions
+            # Denormalise predictions
             graph_ids = total_graph_ids.cpu().numpy().flatten()
             preds = self.scaler.inverse_transform(
                 total_preds.cpu().detach().numpy().flatten().reshape(-1, 1)

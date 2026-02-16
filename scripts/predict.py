@@ -5,22 +5,23 @@ This script processes protein-ligand complexes, generates graphs,
 and makes predictions using an ensemble of trained models.
 """
 
-import pandas as pd
-import pickle
-import torch
-import os
 import argparse
-import time
+import os
+import pickle
 import sys
+import time
 import warnings
+from pathlib import Path
 
-from aev_plig.prediction import Validator, GraphProcessor, Predictor
+import numpy as np
+import pandas as pd
+import polars as pl
+import torch
+
+from aev_plig.config import Config
 from aev_plig.datasets import create_dataset
 from aev_plig.models import MODEL_REGISTRY
-from aev_plig.config import Config
-import numpy as np
-import polars as pl
-from pathlib import Path
+from aev_plig.prediction import GraphProcessor, Predictor, Validator
 
 # Suppress TorchANI warnings
 warnings.filterwarnings("ignore", message="cuaev not installed")
@@ -100,8 +101,13 @@ def main():
     # Validate proteins (if not skipped)
     df = validator.validate_proteins(df, num_workers=config.num_workers)
 
-    # Analyze features and remove problematic molecules
+    # Analyse features and remove problematic molecules
     df = validator.analyze_features(df)
+
+    # Check if we have any valid data left
+    if len(df) == 0:
+        print("ERROR: No valid molecules remaining after validation!")
+        sys.exit(1)
 
     # Save processed dataset
     processed_csv = config.dataset_csv.replace('.csv', '_processed.csv')
@@ -168,10 +174,9 @@ def main():
         str(p) for p in Path(model_dir).glob("*.model")
     )
 
-    
     # Load scaler
     scaler_path = f'{model_dir}/scaler.pickle'
-    
+
     # Create predictor
     predictor = Predictor(
         model_class=MODEL_REGISTRY[config.model],
