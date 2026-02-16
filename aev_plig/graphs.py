@@ -5,10 +5,11 @@ This module provides functions to convert molecular structures into graph repres
 suitable for graph neural network models.
 """
 
-import pandas as pd
 import numpy as np
-from aev_plig.features import atom_features, one_of_k_encoding
+import pandas as pd
+
 from aev_plig.config import Config
+from aev_plig.features import atom_features, one_of_k_encoding
 
 
 def create_graph(mol, mol_df, aevs, extra_features=None):
@@ -36,16 +37,20 @@ def create_graph(mol, mol_df, aevs, extra_features=None):
         extra_features = Config.ATOM_FEATURES
 
     features = []
-    heavy_atom_index = []
+    heavy_atom_index = set()  # Use set for O(1) membership test
     idx_to_idx = {}
     counter = 0
 
+    # Build lookup dict once for O(1) access (instead of O(n) DataFrame filter each time)
+    atom_index_to_row = dict(zip(mol_df['ATOM_INDEX'], mol_df.index))
+
     # Generate nodes (heavy atoms only)
     for atom in mol.GetAtoms():
-        if atom.GetSymbol() != "H":  # Include only non-hydrogen atoms
+        if atom.GetSymbol() != "H":
             idx_to_idx[atom.GetIdx()] = counter
-            aev_idx = mol_df[mol_df['ATOM_INDEX'] == atom.GetIdx()].index
-            heavy_atom_index.append(atom.GetIdx())
+            aev_idx = atom_index_to_row[atom.GetIdx()]
+            heavy_atom_index.add(atom.GetIdx())
+
             # Concatenate atom features with AEVs
             feature = np.append(atom_features(atom, extra_features), aevs[aev_idx, :])
             features.append(feature)
@@ -56,6 +61,7 @@ def create_graph(mol, mol_df, aevs, extra_features=None):
     for bond in mol.GetBonds():
         idx1 = bond.GetBeginAtomIdx()
         idx2 = bond.GetEndAtomIdx()
+
         if idx1 in heavy_atom_index and idx2 in heavy_atom_index:
             # One-hot encode bond type
             bond_type = one_of_k_encoding(bond.GetBondType(), Config.BOND_TYPES)

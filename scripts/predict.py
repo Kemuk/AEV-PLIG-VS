@@ -5,20 +5,23 @@ This script processes protein-ligand complexes, generates graphs,
 and makes predictions using an ensemble of trained models.
 """
 
-import pandas as pd
-import pickle
-import torch
-import os
 import argparse
-import time
+import os
+import pickle
 import sys
+import time
 import warnings
+from pathlib import Path
 
-from aev_plig.prediction import Validator, GraphProcessor, Predictor
+import numpy as np
+import pandas as pd
+import polars as pl
+import torch
+
+from aev_plig.config import Config
 from aev_plig.datasets import create_dataset
 from aev_plig.models import MODEL_REGISTRY
-from aev_plig.config import Config
-import numpy as np
+from aev_plig.prediction import GraphProcessor, Predictor, Validator
 
 # Suppress TorchANI warnings
 warnings.filterwarnings("ignore", message="cuaev not installed")
@@ -98,8 +101,13 @@ def main():
     # Validate proteins (if not skipped)
     df = validator.validate_proteins(df, num_workers=config.num_workers)
 
-    # Analyze features and remove problematic molecules
+    # Analyse features and remove problematic molecules
     df = validator.analyze_features(df)
+
+    # Check if we have any valid data left
+    if len(df) == 0:
+        print("ERROR: No valid molecules remaining after validation!")
+        sys.exit(1)
 
     # Save processed dataset
     processed_csv = config.dataset_csv.replace('.csv', '_processed.csv')
@@ -159,14 +167,15 @@ def main():
     os.environ["MKL_NUM_THREADS"] = str(config.num_workers)
     torch.set_num_threads(config.num_workers)
 
+    model_dir = f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}'
+    print(model_dir)
     # Get model paths (ensemble of 10 models)
-    model_paths = [
-        f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}_{i}.model'
-        for i in range(Config.ENSEMBLE_SIZE)
-    ]
+    model_paths = sorted(
+        str(p) for p in Path(model_dir).glob("*.model")
+    )
 
     # Load scaler
-    scaler_path = f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}.pickle'
+    scaler_path = f'{model_dir}/scaler.pickle'
 
     # Create predictor
     predictor = Predictor(
@@ -188,8 +197,8 @@ def main():
     print("STEP 5: SAVE RESULTS")
     print("="*60 + "\n")
 
-    output_file = f"{Config.PREDICTIONS_DIR}/{config.data_name}_predictions.csv"
-    df.to_csv(output_file, index=False)
+    output_file = f"{Config.PREDICTIONS_DIR}/{config.data_name}_predictions.parquet"
+    pl.from_pandas(df).write_parquet(output_file)
     print(f"Saved predictions to {output_file}")
 
     # ==================== Summary ====================

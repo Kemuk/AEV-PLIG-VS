@@ -36,4 +36,4 @@ python scripts/predict.py \
     --num_workers "$CPUS_STANDARD" \
     --device auto
 
-echo "Predictions saved to output/predictions/${PREDICT_NAME}_predictions.csv"
+echo "Predictions saved to output/predictions/${PREDICT_NAME}_predictions.parquet"
