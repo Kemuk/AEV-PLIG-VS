@@ -50,7 +50,8 @@ def load_pickle(path):
         return data
 
 
-def write_split_chunks(split_dir, ids, targets, graphs_lookup, chunk_size, scale=False, y_scaler=None):
+def write_split_chunks(split_dir, ids, targets, graphs_lookup, chunk_size, scale=False, y_scaler=None,
+                       sdf_files=None, pdb_files=None):
     """
     Create a split in chunked .pt files and write a JSON manifest.
 
@@ -66,6 +67,8 @@ def write_split_chunks(split_dir, ids, targets, graphs_lookup, chunk_size, scale
     for offset in range(0, len(ids), chunk_size):
         ids_chunk = ids[offset:offset + chunk_size]
         targets_chunk = targets[offset:offset + chunk_size]
+        sdf_chunk = sdf_files[offset:offset + chunk_size] if sdf_files is not None else None
+        pdb_chunk = pdb_files[offset:offset + chunk_size] if pdb_files is not None else None
 
         data_chunk, scaler = create_dataset(
             ids_chunk,
@@ -73,6 +76,8 @@ def write_split_chunks(split_dir, ids, targets, graphs_lookup, chunk_size, scale
             graphs_lookup,
             scale=scale,
             y_scaler=scaler,
+            sdf_files=sdf_chunk,
+            pdb_files=pdb_chunk,
         )
 
         part_name = f"part-{offset // chunk_size:05d}.pt"
@@ -159,27 +164,46 @@ def main():
                 pl.col("PDB_code").alias("unique_id"),
                 pl.col("-logKd/Ki").alias("pK"),
                 pl.col("split_core").alias("split"),
+                pl.col("refined"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
             .filter(pl.col("split") == "test")  # TEST ONLY (use 'split' after aliasing)
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .alias("sdf_file"),
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .alias("pdb_file"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(pdbbind)} test entries")
 
         # Take small sample from other datasets for quick test
+        BINDINGNET_FOLDER = "data/bindingnet/from_chembl_client/"
         print("Processing bindingnet_processed.csv (small sample)...")
         bindingnet = (
             pl.scan_csv("data/bindingnet_processed.csv")
             .select([
                 pl.col("unique_identify").alias("unique_id"),
                 pl.col("-logAffi").alias("pK"),
+                pl.col("target"), pl.col("pdb"), pl.col("compnd"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .with_columns(pl.lit("test").alias("split"))
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/target_") + pl.col("target") + pl.lit("/") + pl.col("compnd") + pl.lit("/") + pl.col("pdb") + pl.lit("_") + pl.col("target") + pl.lit("_") + pl.col("compnd") + pl.lit(".sdf"))
+                    .alias("sdf_file"),
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/rec_h_opt.pdb"))
+                    .alias("pdb_file"),
+                pl.lit("test").alias("split"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .head(50)  # Small sample
             .collect()
         )
@@ -200,42 +224,70 @@ def main():
                 pl.col("PDB_code").alias("unique_id"),
                 pl.col("-logKd/Ki").alias("pK"),
                 pl.col("split_core").alias("split"),
+                pl.col("refined"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .alias("sdf_file"),
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .alias("pdb_file"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(pdbbind)} entries after filtering")
 
         # Load and filter BindingNet
+        BINDINGNET_FOLDER = "data/bindingnet/from_chembl_client/"
         print("Processing bindingnet_processed.csv...")
         bindingnet = (
             pl.scan_csv("data/bindingnet_processed.csv")
             .select([
                 pl.col("unique_identify").alias("unique_id"),
                 pl.col("-logAffi").alias("pK"),
+                pl.col("target"), pl.col("pdb"), pl.col("compnd"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .with_columns(pl.lit("train").alias("split"))
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/target_") + pl.col("target") + pl.lit("/") + pl.col("compnd") + pl.lit("/") + pl.col("pdb") + pl.lit("_") + pl.col("target") + pl.lit("_") + pl.col("compnd") + pl.lit(".sdf"))
+                    .alias("sdf_file"),
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/rec_h_opt.pdb"))
+                    .alias("pdb_file"),
+                pl.lit("train").alias("split"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(bindingnet)} entries after filtering")
 
         # Load and filter BindingDB
+        BINDINGDB_FOLDER = "data/bindingdb/surflex/"
         print("Processing bindingdb_processed.csv...")
         bindingdb = (
             pl.scan_csv("data/bindingdb_processed.csv")
             .select([
                 pl.col("unique_id"),
                 pl.col("pK"),
+                pl.col("folder"), pl.col("mol2_file"),
+                pl.col("pdb_file").alias("pdb_file_csv"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .with_columns(pl.lit("train").alias("split"))
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                (pl.lit(BINDINGDB_FOLDER) + pl.col("folder") + pl.lit("/") + pl.col("mol2_file"))
+                    .alias("sdf_file"),
+                (pl.lit(BINDINGDB_FOLDER) + pl.col("folder") + pl.lit("/") + pl.col("pdb_file_csv"))
+                    .alias("pdb_file"),
+                pl.lit("train").alias("split"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(bindingdb)} entries after filtering")
@@ -263,6 +315,8 @@ def main():
         # QUICK TEST MODE: Only create test dataset
         test_ids = data["unique_id"].to_list()
         test_y = data["pK"].to_list()
+        test_sdf = data["sdf_file"].to_list()
+        test_pdb = data["pdb_file"].to_list()
         print(f"\nTest set: {len(test_ids)} samples")
 
         print(f"\n{'─'*70}")
@@ -276,6 +330,8 @@ def main():
             graphs_lookup,
             CHUNK_SIZE,
             scale=True,
+            sdf_files=test_sdf,
+            pdb_files=test_pdb,
         )
 
         scaler_output = dataset_root / "scaler.pickle"
@@ -286,6 +342,7 @@ def main():
         print("✓ QUICK TEST COMPLETED SUCCESSFULLY!")
         print("="*70)
         print(f"  Test:  {written_test:,} graphs")
+        print(f"  Manifest: {manifest_path}")
         print(f"  Output directory: {dataset_root}")
         print("="*70)
 
@@ -294,17 +351,23 @@ def main():
         # Extract train/valid/test splits
         train_df = data.filter(pl.col("split") == "train")
         train_ids = train_df["unique_id"].to_list()
-        train_y = train_df["pK"].to_list()
+        train_y   = train_df["pK"].to_list()
+        train_sdf = train_df["sdf_file"].to_list()
+        train_pdb = train_df["pdb_file"].to_list()
         print(f"\nTrain set: {len(train_ids)} samples")
 
         valid_df = data.filter(pl.col("split") == "valid")
         valid_ids = valid_df["unique_id"].to_list()
-        valid_y = valid_df["pK"].to_list()
+        valid_y   = valid_df["pK"].to_list()
+        valid_sdf = valid_df["sdf_file"].to_list()
+        valid_pdb = valid_df["pdb_file"].to_list()
         print(f"Valid set: {len(valid_ids)} samples")
 
         test_df = data.filter(pl.col("split") == "test")
         test_ids = test_df["unique_id"].to_list()
-        test_y = test_df["pK"].to_list()
+        test_y   = test_df["pK"].to_list()
+        test_sdf = test_df["sdf_file"].to_list()
+        test_pdb = test_df["pdb_file"].to_list()
         print(f"Test set:  {len(test_ids)} samples")
 
         # Create PyTorch Geometric datasets (with progress tracking)
@@ -319,6 +382,8 @@ def main():
             graphs_lookup,
             CHUNK_SIZE,
             scale=True,
+            sdf_files=train_sdf,
+            pdb_files=train_pdb,
         )
 
         print(f"\n{'─'*70}")
@@ -333,6 +398,8 @@ def main():
             CHUNK_SIZE,
             scale=True,
             y_scaler=y_scaler,
+            sdf_files=valid_sdf,
+            pdb_files=valid_pdb,
         )
 
         print(f"\n{'─'*70}")
@@ -347,6 +414,8 @@ def main():
             CHUNK_SIZE,
             scale=True,
             y_scaler=y_scaler,
+            sdf_files=test_sdf,
+            pdb_files=test_pdb,
         )
         with open(dataset_root / "scaler.pickle", "wb") as handle:
             pickle.dump(y_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)

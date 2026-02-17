@@ -29,7 +29,8 @@ def init_weights(layer):
             torch.nn.init.zeros_(layer.bias)
 
 
-def create_dataset(ids, targets, graphs_dict, scale=False, y_scaler=None):
+def create_dataset(ids, targets, graphs_dict, scale=False, y_scaler=None,
+                   sdf_files=None, pdb_files=None):
     """
     Convert graph tuples into a list of PyG Data objects.
 
@@ -39,6 +40,8 @@ def create_dataset(ids, targets, graphs_dict, scale=False, y_scaler=None):
         graphs_dict: Mapping of unique_id -> (c_size, features, edge_index, edge_features).
         scale: If True, apply StandardScaler to targets.
         y_scaler: Optional pre-fit scaler for reuse across splits.
+        sdf_files: Optional list of ligand file paths (stored as Data.sdf_file).
+        pdb_files: Optional list of protein file paths (stored as Data.pdb_file).
 
     Returns:
         tuple[list[Data], StandardScaler | None]: data list and scaler.
@@ -77,6 +80,12 @@ def create_dataset(ids, targets, graphs_dict, scale=False, y_scaler=None):
             edge_attr=torch.tensor(np.array(edge_features), dtype=torch.float32),
             y=torch.tensor([value], dtype=y_dtype),
         )
+        data_point.unique_id = unique_id
+        data_point.pK = float(targets[idx])
+        if sdf_files is not None:
+            data_point.sdf_file = sdf_files[idx]
+        if pdb_files is not None:
+            data_point.pdb_file = pdb_files[idx]
         data_list.append(data_point)
 
     if missing_count > 0:
