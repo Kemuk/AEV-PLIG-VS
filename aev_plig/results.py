@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,73 @@ def load_predictions(path: str) -> pl.DataFrame:
     if parquet_path.suffix.lower() != ".parquet":
         raise ValueError(f"Expected a parquet file, got: {parquet_path}")
     return pl.read_parquet(parquet_path)
+
+
+def load_all_predictions(
+    directory: str | Path,
+    prediction_file_name: str,
+    path_regex: str | None = (
+        r"(?P<model_name>[^/\\]+)[/\\]"
+        r"(?P<model_instance>[^/\\]+)[/\\]"
+        r"[^/\\]+"
+    ),
+) -> pl.DataFrame:
+    """Recursively find ``{prediction_file_name}.parquet`` under *directory*.
+
+    Intended for comparing multiple model architectures/instances on the same
+    benchmark dataset.  The *prediction_file_name* is the dataset stem produced
+    by ``scripts/predict.py``, e.g.::
+
+        "pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark_predictions"
+
+    Under the standard output layout::
+
+        {directory}/{model_name}/{model_instance}/{prediction_file_name}.parquet
+
+    Named capture groups in *path_regex* (applied to each file's path relative
+    to *directory*, always forward-slash separated) become additional columns.
+
+    Parameters
+    ----------
+    directory:
+        Root directory to scan (e.g. ``"output/predictions"``).
+    prediction_file_name:
+        Stem of the target parquet file (no extension, no wildcards).
+    path_regex:
+        Regex with named groups applied to the relative path; ``None`` disables
+        provenance parsing.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *directory* does not exist or no matching parquet files are found.
+    """
+    root = Path(directory)
+    if not root.exists():
+        raise FileNotFoundError(f"Predictions directory not found: {root}")
+
+    glob_pattern = f"**/{prediction_file_name}.parquet"
+    files = sorted(root.glob(glob_pattern))
+    if not files:
+        raise FileNotFoundError(
+            f"No files matching '{glob_pattern}' found under {root}"
+        )
+
+    compiled = re.compile(path_regex) if path_regex else None
+    frames: list[pl.DataFrame] = []
+    for f in files:
+        frame = pl.read_parquet(f)
+
+        if compiled is not None:
+            rel = f.relative_to(root).as_posix()
+            m = compiled.search(rel)
+            if m:
+                for col_name, col_val in m.groupdict().items():
+                    frame = frame.with_columns(pl.lit(col_val or "").alias(col_name))
+
+        frames.append(frame)
+
+    return pl.concat(frames, how="diagonal_relaxed")
 
 
 def rmse(y_true, y_pred) -> float:
