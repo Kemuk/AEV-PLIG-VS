@@ -226,14 +226,17 @@ def load_processed_data(config):
 
     print(f"✓ Loaded {len(all_data)} graphs\n")
 
-    # Load manifest.parquet for rich metadata (unique_id, pK, sdf_file, pdb_file, graph_id)
-    manifest_path = dataset_dir / "manifest.parquet"
-    if manifest_path.exists():
-        df = pl.read_parquet(manifest_path).filter(
-            pl.col("split") == "test"
-        ).to_pandas()
+    # Build df from metadata stored directly on each Data object
+    if all_data and hasattr(all_data[0], 'unique_id'):
+        df = pd.DataFrame({
+            'graph_id': range(len(all_data)),
+            'unique_id': [d.unique_id for d in all_data],
+            'pK':        [d.pK for d in all_data],
+            'sdf_file':  [d.sdf_file for d in all_data],
+            'pdb_file':  [d.pdb_file for d in all_data],
+        })
     else:
-        # Fallback: minimal df for backward compatibility with datasets lacking manifest.parquet
+        # Fallback: minimal df for backward compatibility with older .pt files
         df = pd.DataFrame({'graph_id': list(range(len(all_data)))})
 
     return all_data, df
