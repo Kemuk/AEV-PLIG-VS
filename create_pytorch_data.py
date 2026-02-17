@@ -159,27 +159,46 @@ def main():
                 pl.col("PDB_code").alias("unique_id"),
                 pl.col("-logKd/Ki").alias("pK"),
                 pl.col("split_core").alias("split"),
+                pl.col("refined"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
             .filter(pl.col("split") == "test")  # TEST ONLY (use 'split' after aliasing)
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .alias("sdf_file"),
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .alias("pdb_file"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(pdbbind)} test entries")
 
         # Take small sample from other datasets for quick test
+        BINDINGNET_FOLDER = "data/bindingnet/from_chembl_client/"
         print("Processing bindingnet_processed.csv (small sample)...")
         bindingnet = (
             pl.scan_csv("data/bindingnet_processed.csv")
             .select([
                 pl.col("unique_identify").alias("unique_id"),
                 pl.col("-logAffi").alias("pK"),
+                pl.col("target"), pl.col("pdb"), pl.col("compnd"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .with_columns(pl.lit("test").alias("split"))
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/target_") + pl.col("target") + pl.lit("/") + pl.col("compnd") + pl.lit("/") + pl.col("pdb") + pl.lit("_") + pl.col("target") + pl.lit("_") + pl.col("compnd") + pl.lit(".sdf"))
+                    .alias("sdf_file"),
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/rec_h_opt.pdb"))
+                    .alias("pdb_file"),
+                pl.lit("test").alias("split"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .head(50)  # Small sample
             .collect()
         )
@@ -200,42 +219,70 @@ def main():
                 pl.col("PDB_code").alias("unique_id"),
                 pl.col("-logKd/Ki").alias("pK"),
                 pl.col("split_core").alias("split"),
+                pl.col("refined"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_ligand.mol2"))
+                    .alias("sdf_file"),
+                pl.when(pl.col("refined"))
+                    .then(pl.lit("data/pdbbind/refined-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .otherwise(pl.lit("data/pdbbind/general-set/") + pl.col("unique_id") + pl.lit("/") + pl.col("unique_id") + pl.lit("_protein.pdb"))
+                    .alias("pdb_file"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(pdbbind)} entries after filtering")
 
         # Load and filter BindingNet
+        BINDINGNET_FOLDER = "data/bindingnet/from_chembl_client/"
         print("Processing bindingnet_processed.csv...")
         bindingnet = (
             pl.scan_csv("data/bindingnet_processed.csv")
             .select([
                 pl.col("unique_identify").alias("unique_id"),
                 pl.col("-logAffi").alias("pK"),
+                pl.col("target"), pl.col("pdb"), pl.col("compnd"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .with_columns(pl.lit("train").alias("split"))
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/target_") + pl.col("target") + pl.lit("/") + pl.col("compnd") + pl.lit("/") + pl.col("pdb") + pl.lit("_") + pl.col("target") + pl.lit("_") + pl.col("compnd") + pl.lit(".sdf"))
+                    .alias("sdf_file"),
+                (pl.lit(BINDINGNET_FOLDER) + pl.col("pdb") + pl.lit("/rec_h_opt.pdb"))
+                    .alias("pdb_file"),
+                pl.lit("train").alias("split"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(bindingnet)} entries after filtering")
 
         # Load and filter BindingDB
+        BINDINGDB_FOLDER = "data/bindingdb/surflex/"
         print("Processing bindingdb_processed.csv...")
         bindingdb = (
             pl.scan_csv("data/bindingdb_processed.csv")
             .select([
                 pl.col("unique_id"),
                 pl.col("pK"),
+                pl.col("folder"), pl.col("mol2_file"),
+                pl.col("pdb_file").alias("pdb_file_csv"),
                 pl.col("max_tanimoto_fep_benchmark")
             ])
             .filter(pl.col("max_tanimoto_fep_benchmark") < 0.9)
-            .with_columns(pl.lit("train").alias("split"))
-            .select(["unique_id", "pK", "split"])
+            .with_columns([
+                (pl.lit(BINDINGDB_FOLDER) + pl.col("folder") + pl.lit("/") + pl.col("mol2_file"))
+                    .alias("sdf_file"),
+                (pl.lit(BINDINGDB_FOLDER) + pl.col("folder") + pl.lit("/") + pl.col("pdb_file_csv"))
+                    .alias("pdb_file"),
+                pl.lit("train").alias("split"),
+            ])
+            .select(["unique_id", "pK", "split", "sdf_file", "pdb_file"])
             .collect()
         )
         print(f"  → {len(bindingdb)} entries after filtering")
@@ -282,10 +329,16 @@ def main():
         with open(scaler_output, "wb") as handle:
             pickle.dump(test_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+        # Save manifest.parquet with graph_id
+        manifest = data.with_columns(pl.arange(0, len(data)).alias("graph_id"))
+        manifest_path = dataset_root / "manifest.parquet"
+        manifest.write_parquet(manifest_path)
+
         print("\n" + "="*70)
         print("✓ QUICK TEST COMPLETED SUCCESSFULLY!")
         print("="*70)
         print(f"  Test:  {written_test:,} graphs")
+        print(f"  Manifest: {manifest_path}")
         print(f"  Output directory: {dataset_root}")
         print("="*70)
 
@@ -351,6 +404,15 @@ def main():
         with open(dataset_root / "scaler.pickle", "wb") as handle:
             pickle.dump(y_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+        # Save manifest.parquet with per-split graph_id (sequential 0-based per split)
+        manifest = pl.concat([
+            train_df.with_columns(pl.arange(0, len(train_df)).alias("graph_id")),
+            valid_df.with_columns(pl.arange(0, len(valid_df)).alias("graph_id")),
+            test_df.with_columns(pl.arange(0, len(test_df)).alias("graph_id")),
+        ])
+        manifest_path = dataset_root / "manifest.parquet"
+        manifest.write_parquet(manifest_path)
+
         print("\n" + "="*70)
         print("✓ ALL DATASETS CREATED SUCCESSFULLY!")
         print("="*70)
@@ -358,6 +420,7 @@ def main():
         print(f"  Valid: {written_valid:,} graphs")
         print(f"  Test:  {written_test:,} graphs")
         print(f"  Total: {written_train + written_valid + written_test:,} graphs")
+        print(f"  Manifest: {manifest_path}")
         print(f"  Output directory: {dataset_root}")
         print("="*70)
 

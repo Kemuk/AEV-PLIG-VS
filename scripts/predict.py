@@ -226,8 +226,15 @@ def load_processed_data(config):
 
     print(f"✓ Loaded {len(all_data)} graphs\n")
 
-    # Create minimal dataframe for output
-    df = pd.DataFrame({'graph_id': list(range(len(all_data)))})
+    # Load manifest.parquet for rich metadata (unique_id, pK, sdf_file, pdb_file, graph_id)
+    manifest_path = dataset_dir / "manifest.parquet"
+    if manifest_path.exists():
+        df = pl.read_parquet(manifest_path).filter(
+            pl.col("split") == "test"
+        ).to_pandas()
+    else:
+        # Fallback: minimal df for backward compatibility with datasets lacking manifest.parquet
+        df = pd.DataFrame({'graph_id': list(range(len(all_data)))})
 
     return all_data, df
 

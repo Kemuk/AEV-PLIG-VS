@@ -357,7 +357,8 @@ class Predictor:
             model.to(self.device)
 
             total_preds = torch.Tensor().to(self.device)
-            total_graph_ids = torch.IntTensor().to(self.device)
+            graph_offset = 0  # Track position in dataset using offset, not data.y
+            total_graph_ids = torch.LongTensor()
 
             with torch.no_grad():
                 for data in loader:
@@ -365,11 +366,14 @@ class Predictor:
                     with autocast('cuda', enabled=self.use_amp):
                         output = model.predict(data)
                     total_preds = torch.cat((total_preds, output), 0)
-                    total_graph_ids = torch.cat((total_graph_ids, data.y.view(-1, 1)), 0)
+                    # Use positional counting: data.y contains pK targets, not graph IDs
+                    batch_ids = torch.arange(graph_offset, graph_offset + output.shape[0])
+                    total_graph_ids = torch.cat((total_graph_ids, batch_ids), 0)
+                    graph_offset += output.shape[0]
 
             # Denormalise predictions
             if graph_ids is None:
-                graph_ids = total_graph_ids.cpu().numpy().flatten()
+                graph_ids = total_graph_ids.numpy().flatten()
             preds = self.scaler.inverse_transform(
                 total_preds.cpu().detach().numpy().flatten().reshape(-1, 1)
             ).flatten()
