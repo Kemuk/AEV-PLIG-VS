@@ -122,7 +122,8 @@ def validate_and_process_csv(config):
 
     df = pd.read_csv(config.dataset_csv)
     atom_keys = pd.read_csv(Config.ATOM_KEYS_FILE, sep=",")
-    atom_keys["RESIDUE"] = atom_keys["PDB_ATOM"].apply(lambda x: x.split("-")[0])
+    # Use .str accessor for 2-5x faster vectorized string operations
+    atom_keys["RESIDUE"] = atom_keys["PDB_ATOM"].str.split("-").str[0]
 
     validator = Validator(atom_keys=atom_keys, skip_protein_validation=config.skip_validation)
     df = validator.validate_ligands(df)
@@ -291,7 +292,10 @@ def save_results(df, config, total_time, graph_time=None):
     print("STEP: SAVE RESULTS")
     print("="*60 + "\n")
 
-    output_file = f"{Config.PREDICTIONS_DIR}/{config.data_name}_predictions.parquet"
+    # Create hierarchical output directory structure for better organization
+    output_file = f"{Config.PREDICTIONS_DIR}/{config.model}/{config.trained_model_name}/{config.data_name}_predictions.parquet"
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
     pl.from_pandas(df).write_parquet(output_file)
     print(f"Saved predictions to {output_file}")
 
