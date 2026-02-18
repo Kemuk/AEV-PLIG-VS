@@ -38,6 +38,8 @@ class BaseGATv2Net(torch.nn.Module, ABC):
         config: Configuration object or namespace with model parameters (optional, defaults to Config)
     """
 
+    is_bayesian: bool = False
+
     def __init__(self, node_feature_dim, edge_feature_dim, config=None):
         super().__init__()
 
@@ -164,6 +166,8 @@ class GATv2NetBayesian(BaseGATv2Net):
 
     Output: (mean, variance) tuple for uncertainty quantification
     """
+
+    is_bayesian: bool = True
 
     def __init__(self, node_feature_dim, edge_feature_dim, config=None):
         super().__init__(node_feature_dim, edge_feature_dim, config)
