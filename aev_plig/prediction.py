@@ -8,6 +8,7 @@ and making predictions on new protein-ligand complexes.
 import os
 import pickle
 
+import numpy as np
 import pandas as pd
 import torch
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -21,6 +22,24 @@ from aev_plig.config import Config
 from aev_plig.graphs import create_graph
 from aev_plig.loaders import compute_aevs, load_ligand_atoms, load_protein_atoms_biopandas
 from aev_plig.models import GATv2NetBayesianMixedPrecision, GATv2NetMixedPrecision
+
+
+def denormalize(tensor_or_array, scaler):
+    """Inverse-transform a 1-D prediction tensor/array using a fitted scaler."""
+    if isinstance(tensor_or_array, torch.Tensor):
+        arr = tensor_or_array.cpu().detach().numpy()
+    else:
+        arr = np.asarray(tensor_or_array)
+    return scaler.inverse_transform(arr.flatten().reshape(-1, 1)).flatten()
+
+
+def denormalize_variance(tensor_or_array, scaler):
+    """Rescale variance from normalized space to pK² units (var_pK = var_norm × σ²)."""
+    if isinstance(tensor_or_array, torch.Tensor):
+        arr = tensor_or_array.cpu().detach().numpy()
+    else:
+        arr = np.asarray(tensor_or_array)
+    return arr.flatten() * float(scaler.scale_[0] ** 2)
 
 
 class Validator:
@@ -382,15 +401,12 @@ class Predictor:
             # Denormalise mean predictions
             if graph_ids is None:
                 graph_ids = total_graph_ids.numpy().flatten()
-            preds = self.scaler.inverse_transform(
-                total_preds.cpu().detach().numpy().flatten().reshape(-1, 1)
-            ).flatten()
+            preds = denormalize(total_preds, self.scaler)
             all_preds.append(preds)
 
             # Denormalise variance: var_pK = var_norm * sigma²  (sigma = scaler.scale_[0])
             if is_bayesian:
-                var_norm = total_vars.cpu().detach().numpy().flatten()
-                all_vars.append(var_norm * float(self.scaler.scale_[0] ** 2))
+                all_vars.append(denormalize_variance(total_vars, self.scaler))
 
         # Build DataFrame once with all data
         pred_data = {'graph_id': graph_ids}

@@ -38,7 +38,7 @@ echo "Input:   ${PREDICT_CSV}"
 echo "Output:  ${PREDICT_NAME}"
 echo "========================================"
 
-aev-plig-predict \
+aev-plig-run --predict-only \
     --model "${MODEL_NAME}" \
     --trained_model_name "${TRAINED_MODEL_NAME}" \
     --dataset_csv "${PREDICT_CSV}" \

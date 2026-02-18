@@ -93,7 +93,7 @@ echo ""
 
 # Train single model (array form avoids whitespace/line-continuation argument bugs)
 train_cmd=(
-    aev-plig-train
+    aev-plig-run
     --model "${MODEL}"
     --dataset "${DATASET}"
     --seed "${SEED}"

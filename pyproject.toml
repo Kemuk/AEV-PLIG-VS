@@ -49,8 +49,7 @@ Repository = "https://github.com/Jnelen/AEV-PLIG"
 Documentation = "https://github.com/Jnelen/AEV-PLIG"
 
 [project.scripts]
-aev-plig-train = "scripts.train:main"
-aev-plig-predict = "scripts.predict:main"
+aev-plig-run             = "scripts.run:main"
 aev-plig-generate-graphs = "scripts.generate_pdbbind_graphs:main"
 
 [tool.hatch.build.targets.wheel]
