@@ -347,7 +347,9 @@ class Predictor:
         )
 
         # Collect all predictions first, then build DataFrame once (2-3x faster)
-        all_preds = []
+        is_bayesian = self.model_class.is_bayesian
+        all_preds: list = []
+        all_vars:  list = []
         graph_ids = None
 
         # Predict with each model in ensemble
@@ -357,6 +359,7 @@ class Predictor:
             model.to(self.device)
 
             total_preds = torch.Tensor().to(self.device)
+            total_vars  = torch.Tensor().to(self.device) if is_bayesian else None
             graph_offset = 0  # Track position in dataset using offset, not data.y
             total_graph_ids = torch.LongTensor()
 
@@ -364,21 +367,30 @@ class Predictor:
                 for data in loader:
                     data = data.to(self.device)
                     with autocast('cuda', enabled=self.use_amp):
-                        output = model.predict(data)
-                    total_preds = torch.cat((total_preds, output), 0)
+                        if is_bayesian:
+                            mean_out, var_out = model.forward(data)
+                        else:
+                            mean_out = model.predict(data)
+                    total_preds = torch.cat((total_preds, mean_out), 0)
+                    if is_bayesian:
+                        total_vars = torch.cat((total_vars, var_out), 0)
                     # Use positional counting: data.y contains pK targets, not graph IDs
-                    batch_ids = torch.arange(graph_offset, graph_offset + output.shape[0])
+                    batch_ids = torch.arange(graph_offset, graph_offset + mean_out.shape[0])
                     total_graph_ids = torch.cat((total_graph_ids, batch_ids), 0)
-                    graph_offset += output.shape[0]
+                    graph_offset += mean_out.shape[0]
 
-            # Denormalise predictions
+            # Denormalise mean predictions
             if graph_ids is None:
                 graph_ids = total_graph_ids.numpy().flatten()
             preds = self.scaler.inverse_transform(
                 total_preds.cpu().detach().numpy().flatten().reshape(-1, 1)
             ).flatten()
-
             all_preds.append(preds)
+
+            # Denormalise variance: var_pK = var_norm * sigma²  (sigma = scaler.scale_[0])
+            if is_bayesian:
+                var_norm = total_vars.cpu().detach().numpy().flatten()
+                all_vars.append(var_norm * float(self.scaler.scale_[0] ** 2))
 
         # Build DataFrame once with all data
         pred_data = {'graph_id': graph_ids}
@@ -390,5 +402,12 @@ class Predictor:
         # Compute ensemble average
         pred_cols = [c for c in df_preds.columns if c.startswith('preds_')]
         df_preds['preds'] = df_preds[pred_cols].mean(axis=1)
+
+        # Bayesian aleatoric variance columns (pK² units, mean across checkpoints)
+        if is_bayesian and all_vars:
+            for i, vars_ in enumerate(all_vars):
+                df_preds[f'var_{i}'] = vars_
+            var_cols = [f'var_{i}' for i in range(len(all_vars))]
+            df_preds['var'] = df_preds[var_cols].mean(axis=1)
 
         return df_preds
