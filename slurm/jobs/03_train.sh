@@ -111,8 +111,6 @@ echo ""
 
 # Optional WandB logging: set USE_WANDB=1 when submitting
 WANDB_FLAG=()
-[[ "${USE_WANDB:-0}" == "1" ]] && WANDB_FLAG=(--wandb --wandb_project "aev-plig-vs")
-
 # Train single model (array form avoids whitespace/line-continuation argument bugs)
 train_cmd=(
     aev-plig-train
@@ -126,8 +124,8 @@ train_cmd=(
     --head "${HEAD}"
     --hidden_dim "${HIDDEN_DIM}"
     --lr "${LR}"
-    "${WANDB_FLAG[@]}"
 )
+[[ "${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-vs")
 printf 'CMD: %q ' "\${train_cmd[@]}"; echo
 "\${train_cmd[@]}"
 
