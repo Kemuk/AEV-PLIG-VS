@@ -44,7 +44,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-wandb = ["wandb>=0.16.0"]
+wandb = ["wandb>=0.16.0", "uncertainty-toolbox>=0.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/Jnelen/AEV-PLIG"
@@ -52,7 +52,6 @@ Repository = "https://github.com/Jnelen/AEV-PLIG"
 Documentation = "https://github.com/Jnelen/AEV-PLIG"
 
 [project.scripts]
-aev-plig-run             = "scripts.run:main"
 aev-plig-train           = "scripts.train:main"
 aev-plig-predict         = "scripts.predict:main"
 aev-plig-generate-graphs = "scripts.generate_pdbbind_graphs:main"

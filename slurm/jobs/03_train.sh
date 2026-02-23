@@ -109,8 +109,6 @@ echo "Timestamp: ${TIMESTAMP}"
 echo "========================================="
 echo ""
 
-# Optional WandB logging: set USE_WANDB=1 when submitting
-WANDB_FLAG=()
 # Train single model (array form avoids whitespace/line-continuation argument bugs)
 train_cmd=(
     aev-plig-train

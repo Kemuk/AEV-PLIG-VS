@@ -29,6 +29,9 @@ def parse_args():
     p.add_argument('--hidden_dim',          type=int, default=256)
     p.add_argument('--head',                type=int, default=3)
     p.add_argument('--activation_function', type=str, default='leaky_relu')
+    p.add_argument('--wandb',         action='store_true', help='Log evaluation to Weights & Biases')
+    p.add_argument('--wandb_project', type=str, default='aev-plig-vs')
+    p.add_argument('--wandb_entity',  type=str, default=None)
     return p.parse_args()
 
 
@@ -42,6 +45,47 @@ def main():
     test_data, df, graph_time = load_data(args)
     df = run_predictions(test_data, df, args)
     save_results(df, args, time.time() - start_time, graph_time)
+
+    if args.wandb:
+        import json
+        import wandb
+        from pathlib import Path
+        from aev_plig.models import MODEL_REGISTRY
+        from aev_plig.results import log_evaluation_to_wandb
+
+        model_dir = Path(Config.TRAINED_MODELS_DIR) / args.trained_model_name
+        config_path = model_dir / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                model_cfg = json.load(f)
+        else:
+            model_cfg = {"model": args.model, "dataset": "unknown", "timestamp": "unknown"}
+
+        _model_class = MODEL_REGISTRY.get(model_cfg["model"])
+        _tags = [model_cfg["model"], model_cfg.get("dataset", "unknown")]
+        if _model_class is not None and _model_class.is_bayesian:
+            _tags.append("Bayesian")
+        if "MixedPrecision" in model_cfg["model"]:
+            _tags.append("MixedPrecision")
+
+        run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            group=f"{model_cfg['model']}_{model_cfg.get('timestamp', 'unknown')}",
+            name="evaluation",
+            job_type="evaluation",
+            tags=_tags,
+        )
+        log_evaluation_to_wandb(run, df, model_cfg)
+
+        artifact = wandb.Artifact(
+            name=f"model-{model_cfg['model']}_{model_cfg.get('timestamp', 'unknown')}",
+            type="model",
+            metadata=model_cfg,
+        )
+        artifact.add_dir(str(model_dir))
+        run.log_artifact(artifact)
+        run.finish()
 
 
 if __name__ == "__main__":

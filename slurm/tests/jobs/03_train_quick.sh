@@ -91,8 +91,6 @@ echo "Epochs:    ${EPOCHS}"
 echo "========================================="
 echo ""
 
-# Optional WandB logging: set USE_WANDB=1 when submitting
-WANDB_FLAG=()
 # Train single model (array form avoids whitespace/line-continuation argument bugs)
 train_cmd=(
     aev-plig-train
@@ -107,7 +105,7 @@ train_cmd=(
     --hidden_dim "${HIDDEN_DIM}"
     --lr "${LR}"
 )
-[[ "${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-vs")
+[[ "${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-dev")
 printf 'CMD: %q ' "\${train_cmd[@]}"; echo
 "\${train_cmd[@]}"
 

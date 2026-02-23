@@ -15,7 +15,7 @@ from torch_geometric.loader import DataLoader
 
 from aev_plig.config import Config
 from aev_plig.datasets import init_weights, load_split
-from aev_plig.models import get_model
+from aev_plig.models import get_model, MODEL_REGISTRY
 from aev_plig.training import Trainer, pearson, rmse
 
 warnings.filterwarnings("ignore", message="cuaev not installed")
@@ -102,13 +102,19 @@ def main():
 
         if args.wandb:
             import wandb
+            _model_class = MODEL_REGISTRY[args.model]
+            _tags = [args.model, args.dataset]
+            if _model_class.is_bayesian:
+                _tags.append("Bayesian")
+            if "MixedPrecision" in args.model:
+                _tags.append("MixedPrecision")
             wandb.init(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
                 group=f"{args.model}_{timestamp}",
                 name=f"seed_{seed}",
                 config={**config_dict, "seed": seed},
-                tags=[args.model, args.dataset],
+                tags=_tags,
             )
 
         random.seed(seed)
@@ -145,15 +151,34 @@ def main():
 
         if args.wandb:
             import wandb
+            from scipy.stats import pearsonr as _pearsonr, spearmanr as _spearmanr
+            from scipy.stats import kendalltau as _kendalltau, ttest_1samp as _ttest_1samp
+            from aev_plig.results import js_divergence
+            from aev_plig.training import concordance_index as _ci
             abs_res = np.abs(G_test - P_test)
+            residuals = G_test - P_test
+            _, pr_p = _pearsonr(G_test, P_test)
+            sr_r, sr_p = _spearmanr(G_test, P_test)
+            kt_r, kt_p = _kendalltau(G_test, P_test)
+            _, bias_p = _ttest_1samp(residuals, 0)
             summary = {
-                "best_val_pearson":   trainer.best_pc,
-                "test_pearson":       test_pc,
-                "test_rmse":          test_rmse_val,
-                "test_success_0.5pK": float((abs_res <= 0.5).mean()),
-                "test_success_1.0pK": float((abs_res <= 1.0).mean()),
-                "test_success_1.5pK": float((abs_res <= 1.5).mean()),
-                "test_success_2.0pK": float((abs_res <= 2.0).mean()),
+                "best_val_pearson":        trainer.best_pc,
+                "test_pearson":            test_pc,
+                "test_pearson_pvalue":     float(pr_p),
+                "test_spearman_r":         float(sr_r),
+                "test_spearman_pvalue":    float(sr_p),
+                "test_kendall_tau":        float(kt_r),
+                "test_kendall_pvalue":     float(kt_p),
+                "test_concordance_index":  float(_ci(G_test, P_test)),
+                "test_rmse":               test_rmse_val,
+                "test_mae":                float(abs_res.mean()),
+                "test_bias_mean":          float(residuals.mean()),
+                "test_bias_pvalue":        float(bias_p),
+                "test_js_divergence":      js_divergence(G_test, P_test),
+                "test_success_0.5pK":      float((abs_res <= 0.5).mean()),
+                "test_success_1.0pK":      float((abs_res <= 1.0).mean()),
+                "test_success_1.5pK":      float((abs_res <= 1.5).mean()),
+                "test_success_2.0pK":      float((abs_res <= 2.0).mean()),
             }
             if len(pred_out) == 3:  # Bayesian: aleatoric calibration
                 aleatoric_std = np.sqrt(pred_out[2])
