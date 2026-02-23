@@ -109,9 +109,13 @@ echo "Timestamp: ${TIMESTAMP}"
 echo "========================================="
 echo ""
 
+# Optional WandB logging: set USE_WANDB=1 when submitting
+WANDB_FLAG=()
+[[ "${USE_WANDB:-0}" == "1" ]] && WANDB_FLAG=(--wandb --wandb_project "aev-plig-vs")
+
 # Train single model (array form avoids whitespace/line-continuation argument bugs)
 train_cmd=(
-    aev-plig-run
+    aev-plig-train
     --model "${MODEL}"
     --dataset "${DATASET}"
     --seed "${SEED}"
@@ -122,6 +126,7 @@ train_cmd=(
     --head "${HEAD}"
     --hidden_dim "${HIDDEN_DIM}"
     --lr "${LR}"
+    "${WANDB_FLAG[@]}"
 )
 printf 'CMD: %q ' "\${train_cmd[@]}"; echo
 "\${train_cmd[@]}"

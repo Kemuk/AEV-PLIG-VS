@@ -2,11 +2,14 @@
 PyTorch Geometric dataset utilities for protein-ligand graphs.
 """
 
+import json
 import warnings
+from pathlib import Path
 
 import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler
+from torch.utils.data import ConcatDataset
 from torch_geometric.data import Data
 from tqdm import tqdm
 
@@ -93,3 +96,28 @@ def create_dataset(ids, targets, graphs_dict, scale=False, y_scaler=None,
     print(f"✓ Processed {len(data_list)}/{len(ids)} graphs")
 
     return data_list, scaler
+
+
+def load_split(dataset_name, split):
+    """Load split data from chunked manifest format, with flat-file fallback."""
+    dataset_root = Path("data/processed") / dataset_name
+    split_dir = dataset_root / split
+    manifest_path = split_dir / "manifest.json"
+
+    if manifest_path.exists():
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        parts = [
+            torch.load(split_dir / part_name, weights_only=False)
+            for part_name in manifest["parts"]
+        ]
+        return parts[0] if len(parts) == 1 else ConcatDataset(parts)
+
+    legacy_path = Path("data/processed") / f"{dataset_name}_{split}.pt"
+    if legacy_path.exists():
+        return torch.load(legacy_path, weights_only=False)
+
+    raise FileNotFoundError(
+        f"No dataset artifacts found for split '{split}'. "
+        f"Checked {manifest_path} and {legacy_path}."
+    )

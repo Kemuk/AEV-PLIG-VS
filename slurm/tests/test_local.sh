@@ -55,23 +55,40 @@ print('Model creation OK')
 "
 
 echo ""
-echo "===== Test 4: Example Prediction (CPU) ====="
-python -c "
-import subprocess, sys
-result = subprocess.run(
-    [sys.executable, 'scripts/predict.py',
-     '--dataset_csv', 'data/example_dataset.csv',
-     '--data_name', 'test_local',
-     '--device', 'cpu',
-     '--num_workers', '1'],
-    capture_output=True, text=True, timeout=300
-)
-print(result.stdout[-500:] if len(result.stdout) > 500 else result.stdout)
-if result.returncode != 0:
-    print('STDERR:', result.stderr[-500:])
-    sys.exit(1)
-print('Prediction test OK')
-" 2>&1 || echo "Test 4 failed (may need trained model — this is OK for initial setup)"
+echo "===== Test 4: Training (2 epochs, CPU, GATv2Net, seed 42) ====="
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+aev-plig-train \
+    --dataset "${DATASET_NAME}" \
+    --model GATv2Net \
+    --seed 42 \
+    --epochs 2 \
+    --hidden_dim 64 \
+    --device cpu \
+    --timestamp "${TIMESTAMP}" \
+    --num_workers 1 \
+    2>&1 | tail -30 || echo "Test 4 failed (missing processed data?)"
+echo "Training test done"
+
+echo ""
+echo "===== Test 5: Predict with just-trained model ====="
+aev-plig-predict \
+    --trained_model_name "GATv2Net_${TIMESTAMP}" \
+    --data_name "${DATASET_NAME}" \
+    --use_processed \
+    --device cpu \
+    --num_workers 1 \
+    2>&1 | tail -20 || echo "Test 5 failed (may need processed test split)"
+echo "Prediction test done"
+
+echo ""
+echo "===== Test 6: Example prediction with pre-trained model (CPU) ====="
+aev-plig-predict \
+    --dataset_csv data/example_dataset.csv \
+    --data_name test_local \
+    --device cpu \
+    --num_workers 1 \
+    2>&1 | tail -20 || echo "Test 6 failed (may need pre-trained model)"
+echo "Prediction test done"
 
 echo ""
 echo "All local tests complete."
