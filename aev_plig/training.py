@@ -14,6 +14,7 @@ from aev_plig.config import Config
 from aev_plig.models import GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision
 from math import sqrt
 from scipy import stats
+from aev_plig.prediction import denormalize, denormalize_variance
 
 
 # ==================== Metrics ====================
@@ -271,12 +272,8 @@ class Trainer:
                 total_labels = torch.cat((total_labels, data.y.view(-1, 1).cpu()), 0)
 
         # Denormalize predictions and labels
-        y_true = self.y_scaler.inverse_transform(
-            total_labels.numpy().flatten().reshape(-1, 1)
-        ).flatten()
-        y_pred = self.y_scaler.inverse_transform(
-            total_preds.detach().numpy().flatten().reshape(-1, 1)
-        ).flatten()
+        y_true = denormalize(total_labels, self.y_scaler)
+        y_pred = denormalize(total_preds, self.y_scaler)
 
         return y_true, y_pred
 
@@ -374,16 +371,11 @@ class Trainer:
                 total_labels = torch.cat((total_labels, data.y.view(-1, 1).cpu()), 0)
 
         # Denormalize predictions and labels
-        y_true = self.y_scaler.inverse_transform(
-            total_labels.numpy().flatten().reshape(-1, 1)
-        ).flatten()
-        y_pred = self.y_scaler.inverse_transform(
-            total_preds.detach().numpy().flatten().reshape(-1, 1)
-        ).flatten()
+        y_true = denormalize(total_labels, self.y_scaler)
+        y_pred = denormalize(total_preds, self.y_scaler)
 
         if is_bayesian:
-            # Return variance as well (not denormalized - it's in normalized space)
-            y_var = total_vars.detach().numpy().flatten()
+            y_var = denormalize_variance(total_vars, self.y_scaler)
             return y_true, y_pred, y_var
 
         return y_true, y_pred
