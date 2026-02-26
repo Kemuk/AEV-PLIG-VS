@@ -8,7 +8,11 @@
 # - Devel partition (10 min max)
 #
 # Usage:
-#   ./slurm/tests/jobs/03_train_quick.sh
+#   ./slurm/tests/jobs/03_train_quick.sh [--model MODEL_NAME] [--dataset DATASET_NAME]
+#
+# Options:
+#   --model MODELNAME       Override model from config (e.g., GATv2NetMixedPrecision)
+#   --dataset DATASETNAME   Override dataset from config
 # =============================================================================
 set -euo pipefail
 
@@ -18,10 +22,6 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 # Load configuration
 source "$PROJECT_ROOT/slurm/config.sh"
-
-# Training configuration
-MODEL="${MODEL_NAME}"
-DATASET="${DATASET_NAME}"
 
 # Parse command-line arguments
 MODEL="${MODEL_NAME}"
@@ -41,7 +41,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
 
 # Hyperparameters (matching original training command)
 ACTIVATION="leaky_relu"
@@ -73,39 +72,39 @@ echo "Seeds:        ${#SEEDS[@]} models (TEST)"
 echo "Epochs:       ${EPOCHS} (TEST)"
 echo "Timestamp:    ${TIMESTAMP}"
 echo "Partition:    ${PARTITION} (10 min max)"
-echo "Output dir:   output/trained_models/${MODEL}_${TIMESTAMP}/"
+echo "Output dir:   output/trained_models/${MODEL}_TEST_${TIMESTAMP}/"
 echo "========================================"
 echo ""
 
 # Create log directory if needed
 mkdir -p "$PROJECT_ROOT/slurm/logs"
 
-# Submit parallel jobs
-JOB_IDS=()
-for SEED in "${SEEDS[@]}"; do
-    echo "Submitting seed ${SEED}..."
-
-    JOB_ID=$(sbatch --parsable <<EOF
+# Submit all seeds as a single array job
+JOB_ID=$(sbatch --parsable --array=0-$((${#SEEDS[@]}-1)) <<EOF
 #!/bin/bash
-#SBATCH --job-name=train_quick_s${SEED}
+#SBATCH --job-name=${MODEL}_quick
 #SBATCH --cluster=${CLUSTER_NAME}
 #SBATCH --partition=${PARTITION}
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --mem=${MEM}
 #SBATCH --cpus-per-task=${CPUS}
 #SBATCH --gres=gpu:${GPUS}
-#SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%j.out
-#SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%j.err
+#SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.out
+#SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.err
 #SBATCH --chdir=${PROJECT_ROOT}
 
 # Load environment
 source ${PROJECT_ROOT}/slurm/config.sh
 
+# Resolve seed from array task index
+SEEDS=(${SEEDS[*]})
+SEED="\${SEEDS[\$SLURM_ARRAY_TASK_ID]}"
+
 echo "========================================="
-echo "QUICK TEST: Training Seed ${SEED}"
+echo "QUICK TEST: Training Seed \${SEED}"
 echo "========================================="
 echo "Node:      \$(hostname)"
-echo "Job ID:    \${SLURM_JOB_ID}"
+echo "Job ID:    \${SLURM_JOB_ID} (array task \${SLURM_ARRAY_TASK_ID})"
 echo "Timestamp: ${TIMESTAMP}"
 echo "Epochs:    ${EPOCHS}"
 echo "========================================="
@@ -116,7 +115,7 @@ train_cmd=(
     aev-plig-train
     --model "${MODEL}"
     --dataset "${DATASET}"
-    --seed "${SEED}"
+    --seed "\${SEED}"
     --timestamp "TEST_${TIMESTAMP}"
     --activation_function "${ACTIVATION}"
     --batch_size "${BATCH_SIZE}"
@@ -125,25 +124,20 @@ train_cmd=(
     --hidden_dim "${HIDDEN_DIM}"
     --lr "${LR}"
 )
-[[ "${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-dev")
+[[ "\${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-dev")
 printf 'CMD: %q ' "\${train_cmd[@]}"; echo
 "\${train_cmd[@]}"
 
 echo ""
-echo "✓ Seed ${SEED} quick test complete"
-echo "✓ Model saved to: output/trained_models/${MODEL}_${TIMESTAMP}/model_seed_${SEED}.model"
+echo "✓ Seed \${SEED} quick test complete"
+echo "✓ Model saved to: output/trained_models/${MODEL}_TEST_${TIMESTAMP}/model_seed_\${SEED}.model"
 EOF
 )
 
-    JOB_IDS+=("${JOB_ID}")
-    echo "  → Job ID: ${JOB_ID}"
-done
-
-echo ""
 echo "========================================"
-echo "✓ Submitted ${#SEEDS[@]} quick test jobs"
+echo "✓ Submitted array job (${#SEEDS[@]} tasks)"
 echo "========================================"
-echo "Job IDs: ${JOB_IDS[*]}"
+echo "Job ID: ${JOB_ID}  (tasks ${JOB_ID}_0 to ${JOB_ID}_$((${#SEEDS[@]}-1)))"
 echo ""
 echo "Monitor jobs with:"
 echo "  squeue -u \$USER"
@@ -151,8 +145,8 @@ echo ""
 echo "View logs in:"
 echo "  ${PROJECT_ROOT}/slurm/logs/"
 echo ""
-echo "Expected runtime: ~5-10 minutes per job"
+echo "Expected runtime: ~5-10 minutes per task"
 echo ""
 echo "Output will be saved to:"
-echo "  output/trained_models/${MODEL}_${TIMESTAMP}/"
+echo "  output/trained_models/${MODEL}_TEST_${TIMESTAMP}/"
 echo "========================================"
