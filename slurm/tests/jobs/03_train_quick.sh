@@ -93,7 +93,7 @@ echo ""
 
 # Train single model (array form avoids whitespace/line-continuation argument bugs)
 train_cmd=(
-    aev-plig-run
+    aev-plig-train
     --model "${MODEL}"
     --dataset "${DATASET}"
     --seed "${SEED}"
@@ -105,6 +105,7 @@ train_cmd=(
     --hidden_dim "${HIDDEN_DIM}"
     --lr "${LR}"
 )
+[[ "${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-dev")
 printf 'CMD: %q ' "\${train_cmd[@]}"; echo
 "\${train_cmd[@]}"
 

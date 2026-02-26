@@ -5,11 +5,15 @@ This module provides classes for validating data, processing graphs,
 and making predictions on new protein-ligand complexes.
 """
 
+import json
 import os
 import pickle
+import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import torch
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
@@ -21,7 +25,7 @@ from tqdm import tqdm
 from aev_plig.config import Config
 from aev_plig.graphs import create_graph
 from aev_plig.loaders import compute_aevs, load_ligand_atoms, load_protein_atoms_biopandas
-from aev_plig.models import GATv2NetBayesianMixedPrecision, GATv2NetMixedPrecision
+from aev_plig.models import GATv2NetBayesianMixedPrecision, GATv2NetMixedPrecision, MODEL_REGISTRY
 
 
 def denormalize(tensor_or_array, scaler):
@@ -427,3 +431,208 @@ class Predictor:
             df_preds['var'] = df_preds[var_cols].mean(axis=1)
 
         return df_preds
+
+
+# ==================== Pipeline Functions ====================
+# These functions are called by scripts/predict.py (and scripts/train.py for
+# post-training prediction). All non-trivial logic lives here; the scripts are
+# thin shells.
+
+def validate_and_process_csv(config):
+    """Validate data, generate graphs, and create PyTorch dataset from CSV."""
+    from aev_plig.datasets import create_dataset
+    start_time = time.time()
+
+    print("\n" + "="*60)
+    print("STEP 1: VALIDATE DATA")
+    print("="*60 + "\n")
+
+    df = pd.read_csv(config.dataset_csv)
+    atom_keys = pd.read_csv(Config.ATOM_KEYS_FILE, sep=",")
+    atom_keys["RESIDUE"] = atom_keys["PDB_ATOM"].str.split("-").str[0]
+
+    validator = Validator(atom_keys=atom_keys, skip_protein_validation=config.skip_validation)
+    df = validator.validate_ligands(df)
+    df = validator.validate_proteins(df, num_workers=config.num_workers)
+    df = validator.analyze_features(df)
+
+    if len(df) == 0:
+        raise ValueError("No valid molecules remaining after validation!")
+
+    processed_csv = config.dataset_csv.replace('.csv', '_processed.csv')
+    df.to_csv(processed_csv, index=False)
+    print(f"Saved processed dataset to {processed_csv}\n")
+
+    print("\n" + "="*60)
+    print("STEP 2: GENERATE MOLECULAR GRAPHS")
+    print("="*60 + "\n")
+
+    atom_map = pd.DataFrame(pd.unique(atom_keys["ATOM_TYPE"]))
+    atom_map[1] = list(np.arange(len(atom_map)) + 1)
+    atom_map = atom_map.rename(columns={0: "ATOM_TYPE", 1: "ATOM_NR"})
+
+    radial_coefs = Config.get_radial_coefs()
+    processor = GraphProcessor(atom_keys, atom_map, radial_coefs)
+    mol_graphs = processor.process_batch(df, num_workers=config.num_workers)
+
+    output_graphs_file = f"data/{config.data_name}_graphs.pickle"
+    with open(output_graphs_file, 'wb') as handle:
+        pickle.dump(mol_graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    graph_time = time.time() - start_time
+    print(f"\nGraph generation time: {graph_time:.2f} seconds\n")
+
+    print("\n" + "="*60)
+    print("STEP 3: CREATE PYTORCH DATASET")
+    print("="*60 + "\n")
+
+    df["graph_id"] = range(len(df))
+    test_ids = list(df["unique_id"])
+    test_graph_ids = list(df["graph_id"])
+
+    test_data, _ = create_dataset(test_ids, test_graph_ids, mol_graphs, scale=False)
+
+    return test_data, df, graph_time
+
+
+def load_processed_data(config):
+    """Load PyTorch dataset from processed data directory."""
+    data_name = config.data_name
+    split = 'test'
+
+    dataset_dir = Path(Config.PROCESSED_DATA_DIR) / data_name
+    split_dir = dataset_dir / split
+    manifest_path = split_dir / "manifest.json"
+
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"No processed data found at {split_dir}\n"
+            f"Run create_pytorch_data.py first to generate processed datasets."
+        )
+
+    scaler_path = dataset_dir / "scaler.pickle"
+    if not scaler_path.exists():
+        print(f"Warning: No scaler found at {scaler_path}")
+        print("   Predictions may not be properly denormalized.")
+
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+
+    print(f"Loading processed dataset: {data_name}/{split}")
+    print(f"  Chunks: {len(manifest['parts'])}")
+    print(f"  Graphs: {manifest['num_graphs_written']}")
+
+    all_data = []
+    for part_file in tqdm(manifest['parts'], desc="Loading chunks"):
+        part_path = split_dir / part_file
+        data_chunk = torch.load(part_path, weights_only=False)
+        all_data.extend(data_chunk)
+
+    print(f"Loaded {len(all_data)} graphs\n")
+
+    if all_data and hasattr(all_data[0], 'unique_id'):
+        df = pd.DataFrame({
+            'graph_id': range(len(all_data)),
+            'unique_id': [d.unique_id for d in all_data],
+            'pK':        [d.pK for d in all_data],
+            'sdf_file':  [d.sdf_file for d in all_data],
+            'pdb_file':  [d.pdb_file for d in all_data],
+        })
+    else:
+        df = pd.DataFrame({'graph_id': list(range(len(all_data)))})
+
+    return all_data, df
+
+
+def load_data(config):
+    """Dispatcher: load from processed dir or CSV depending on config."""
+    if config.use_processed or config.dataset_csv is None:
+        data, df = load_processed_data(config)
+        return data, df, None
+    return validate_and_process_csv(config)  # returns (data, df, graph_time)
+
+
+def run_predictions(test_data, df, config):
+    """Make predictions using ensemble of trained models.
+
+    Loads model architecture from config.json in the model directory if present
+    (written by train.py). Falls back to config.model for backward compat with
+    models trained before this change.
+    """
+    print("\n" + "="*60)
+    print("STEP: MAKE PREDICTIONS")
+    print("="*60 + "\n")
+
+    os.environ["OMP_NUM_THREADS"] = str(config.num_workers)
+    os.environ["MKL_NUM_THREADS"] = str(config.num_workers)
+    torch.set_num_threads(config.num_workers)
+
+    model_dir = f'{Config.TRAINED_MODELS_DIR}/{config.trained_model_name}'
+    print(f"Model directory: {model_dir}")
+
+    # Load arch from config.json if present (train.py saves this)
+    config_path = Path(model_dir) / "config.json"
+    if config_path.exists():
+        with open(config_path) as f:
+            model_cfg = json.load(f)
+        model_class = MODEL_REGISTRY[model_cfg["model"]]
+        pred_config = type('Namespace', (), {**model_cfg, "device": config.device})()
+    else:
+        # Backward compat: use CLI-provided arch flags
+        model_class = MODEL_REGISTRY[config.model]
+        pred_config = config
+
+    model_paths = sorted(str(p) for p in Path(model_dir).glob("*.model"))
+    scaler_path = f'{model_dir}/scaler.pickle'
+
+    predictor = Predictor(
+        model_class=model_class,
+        model_paths=model_paths,
+        scaler_path=scaler_path,
+        device=config.device,
+        config=pred_config,
+    )
+
+    df_preds = predictor.predict(test_data)
+    df = df.merge(df_preds, on='graph_id', how='left')
+
+    return df
+
+
+def save_results(df, config, total_time, graph_time=None):
+    """Save predictions and print summary. Prints metrics if pK column present."""
+    print("\n" + "="*60)
+    print("STEP: SAVE RESULTS")
+    print("="*60 + "\n")
+
+    output_file = (
+        f"{Config.PREDICTIONS_DIR}/"
+        f"{config.trained_model_name}/{config.data_name}_predictions.parquet"
+    )
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    pl.from_pandas(df).write_parquet(output_file)
+    print(f"Saved predictions to {output_file}")
+
+    # Metrics when ground truth is available
+    if 'pK' in df.columns and 'preds' in df.columns:
+        from aev_plig.results import overall_metrics
+        pl_df = pl.from_pandas(df)
+        print("\n" + "="*60)
+        print("PREDICTION METRICS")
+        print("="*60)
+        for col in sorted(c for c in df.columns if c.startswith('preds_')):
+            m = overall_metrics(pl_df, truth_col='pK', pred_col=col)
+            print(f"  {col}: R={m['pearson_r']:.4f}  RMSE={m['rmse']:.4f}  τ={m['kendall_tau']:.4f}")
+        ens = overall_metrics(pl_df, truth_col='pK', pred_col='preds')
+        print(f"  ensemble: R={ens['pearson_r']:.4f}  RMSE={ens['rmse']:.4f}"
+              f"  τ={ens['kendall_tau']:.4f}  n={ens['n']:.0f}")
+
+    print("\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    print(f"Total complexes processed: {len(df)}")
+    if graph_time is not None:
+        print(f"Graph generation time: {graph_time:.2f} seconds")
+    print(f"Total pipeline time: {total_time:.2f} seconds")
+    print("="*60 + "\n")

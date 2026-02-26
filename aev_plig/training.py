@@ -16,6 +16,11 @@ from math import sqrt
 from scipy import stats
 from aev_plig.prediction import denormalize, denormalize_variance
 
+try:
+    import wandb as _wandb
+except ImportError:
+    _wandb = None
+
 
 # ==================== Metrics ====================
 
@@ -327,6 +332,14 @@ class Trainer:
             print('Current validation RMSE: {:.4f}'.format(current_rmse))
             print('Best rolling avg PC so far: {:.4f}'.format(self.best_pc))
             print('-' * 50)
+
+            if _wandb is not None and _wandb.run is not None:
+                _wandb.log({
+                    "epoch":       epoch + 1,
+                    "train_loss":  train_loss,
+                    "val_pearson": current_pc,
+                    "val_rmse":    current_rmse,
+                })
 
         return history
 
