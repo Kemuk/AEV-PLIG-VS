@@ -62,7 +62,7 @@ GPUS=1
 SEEDS=(100 123 15)
 
 # Create shared timestamp for ensemble
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+TIMESTAMP=$(date +%Y-%m-%d_%H-00)
 
 echo "========================================"
 echo "QUICK TEST: Parallel Training"

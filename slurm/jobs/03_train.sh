@@ -62,7 +62,7 @@ GPUS="v100:1"
 SEEDS=(100 123 15 257 2 2012 3752 350 843 621)
 
 # Create shared timestamp for ensemble
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+TIMESTAMP=$(date +%Y-%m-%d_%H-00)
 
 echo "========================================"
 echo "Parallel Training Job Submission"
