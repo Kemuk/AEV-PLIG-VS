@@ -62,7 +62,7 @@ GPUS="v100:1"
 SEEDS=(100 123 15 257 2 2012 3752 350 843 621)
 
 # Create shared timestamp for ensemble
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+TIMESTAMP=$(date +%Y-%m-%d_%H-00)
 
 echo "========================================"
 echo "Parallel Training Job Submission"
@@ -79,32 +79,32 @@ echo ""
 # Create log directory if needed
 mkdir -p "$PROJECT_ROOT/slurm/logs"
 
-# Submit parallel jobs
-JOB_IDS=()
-for SEED in "${SEEDS[@]}"; do
-    echo "Submitting seed ${SEED}..."
-
-    JOB_ID=$(sbatch --parsable <<EOF
+# Submit all seeds as a single array job
+JOB_ID=$(sbatch --parsable --array=0-$((${#SEEDS[@]}-1)) <<EOF
 #!/bin/bash
-#SBATCH --job-name=train_${MODEL}_s${SEED}
+#SBATCH --job-name=${MODEL}
 #SBATCH --cluster=${CLUSTER_NAME}
 #SBATCH --partition=${PARTITION}
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --mem=${MEM}
 #SBATCH --cpus-per-task=${CPUS}
 #SBATCH --gres=gpu:${GPUS}
-#SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%j.out
-#SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%j.err
+#SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.out
+#SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.err
 #SBATCH --chdir=${PROJECT_ROOT}
 
 # Load environment
 source ${PROJECT_ROOT}/slurm/config.sh
 
+# Resolve seed from array task index
+SEEDS=(${SEEDS[*]})
+SEED="\${SEEDS[\$SLURM_ARRAY_TASK_ID]}"
+
 echo "========================================="
-echo "Training Model: Seed ${SEED}"
+echo "Training Model: Seed \${SEED}"
 echo "========================================="
 echo "Node:      \$(hostname)"
-echo "Job ID:    \${SLURM_JOB_ID}"
+echo "Job ID:    \${SLURM_JOB_ID} (array task \${SLURM_ARRAY_TASK_ID})"
 echo "Timestamp: ${TIMESTAMP}"
 echo "========================================="
 echo ""
@@ -114,7 +114,7 @@ train_cmd=(
     aev-plig-train
     --model "${MODEL}"
     --dataset "${DATASET}"
-    --seed "${SEED}"
+    --seed "\${SEED}"
     --timestamp "${TIMESTAMP}"
     --activation_function "${ACTIVATION}"
     --batch_size "${BATCH_SIZE}"
@@ -123,25 +123,21 @@ train_cmd=(
     --hidden_dim "${HIDDEN_DIM}"
     --lr "${LR}"
 )
-[[ "${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-vs")
+[[ "\${USE_WANDB:-0}" == "1" ]] && train_cmd+=(--wandb --wandb_project "aev-plig-vs")
 printf 'CMD: %q ' "\${train_cmd[@]}"; echo
 "\${train_cmd[@]}"
 
 echo ""
-echo "✓ Seed ${SEED} training complete"
-echo "✓ Model saved to: output/trained_models/${MODEL}_${TIMESTAMP}/model_seed_${SEED}.model"
+echo "✓ Seed \${SEED} training complete"
+echo "✓ Model saved to: output/trained_models/${MODEL}_${TIMESTAMP}/model_seed_\${SEED}.model"
 EOF
 )
 
-    JOB_IDS+=("${JOB_ID}")
-    echo "  → Job ID: ${JOB_ID}"
-done
-
 echo ""
 echo "========================================"
-echo "✓ Submitted ${#SEEDS[@]} parallel jobs"
+echo "✓ Submitted array job (${#SEEDS[@]} tasks)"
 echo "========================================"
-echo "Job IDs: ${JOB_IDS[*]}"
+echo "Job ID: ${JOB_ID}  (tasks ${JOB_ID}_0 to ${JOB_ID}_$((${#SEEDS[@]}-1)))"
 echo ""
 echo "Monitor jobs with:"
 echo "  squeue -u \$USER"

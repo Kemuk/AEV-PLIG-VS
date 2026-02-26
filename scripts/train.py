@@ -112,7 +112,7 @@ def main():
                 project=args.wandb_project,
                 entity=args.wandb_entity,
                 group=f"{args.model}_{timestamp}",
-                name=f"seed_{seed}",
+                name=f"{args.model}_seed_{seed}",
                 config={**config_dict, "seed": seed},
                 tags=_tags,
             )
