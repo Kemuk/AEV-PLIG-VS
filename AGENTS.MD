@@ -107,6 +107,180 @@ Store metadata as custom attributes directly in PyTorch Geometric `Data` objects
 
 ## Future Enhancements
 
+### UMAP Embedding Visualisation in WandB
+
+**Status**: Planned, not yet implemented
+**Difficulty**: Medium
+**Priority**: Medium — shelved for a dedicated session
+
+#### Goal
+
+After `aev-plig-predict --wandb`, log a UMAP projection of the learned graph
+embeddings (the pooled GNN representation before the FC head) to the WandB
+evaluation run.  Three colourings are needed:
+
+| Plot | Colour axis | Scientific question |
+|------|-------------|---------------------|
+| `eval_umap_pK` | True pK value | Does embedding space encode binding affinity? |
+| `eval_umap_error` | `\|ε\|` = `\|true − pred\|` | Which regions of chemical space fail? |
+| `eval_umap_uncertainty` | Predicted σ (Bayesian only) | Where is the model uncertain? |
+
+Subsample to ≤ 2 000 random points so UMAP stays fast regardless of dataset
+size.  Degrade silently if `umap-learn` is not installed (same pattern as
+`uncertainty_toolbox`).
+
+#### Open Decision
+
+`run_predictions()` in `aev_plig/prediction.py` currently returns the
+predictions array and doesn't expose the loaded model.  Two options:
+
+- **Option A (preferred)** — add a `load_model(args, config)` helper to
+  `aev_plig/prediction.py`.  `predict.py` calls it, keeps a reference to the
+  first model, and passes it to both `run_predictions()` and the new
+  `extract_embeddings()`.  Clean composable interface.
+
+- **Option B** — add `return_model=True` kwarg to `run_predictions()`.
+  Simpler but muddies the return type.
+
+#### Implementation Steps
+
+1. **`aev_plig/prediction.py`** — add two helpers:
+
+   ```python
+   def load_model(args, model_cfg: dict, device):
+       """Load a single trained model from model_cfg and args."""
+       from aev_plig.models import MODEL_REGISTRY
+       model_class = MODEL_REGISTRY[model_cfg["model"]]
+       model = model_class(node_feature_dim=..., edge_feature_dim=...,
+                           config=args)
+       ckpt_path = Path(Config.TRAINED_MODELS_DIR) / args.trained_model_name \
+                   / f"model_seed_{first_seed}.model"
+       model.load_state_dict(torch.load(ckpt_path, map_location=device))
+       model.eval()
+       return model
+
+   def extract_embeddings(model, loader, device, max_points: int = 2000) -> np.ndarray:
+       """Return (N, 2*hidden_dim) graph-level embeddings via a forward hook on lin1."""
+       import torch
+       captured = []
+       def _hook(module, inp, out):
+           captured.append(inp[0].detach().cpu())
+       handle = model.lin1.register_forward_hook(_hook)
+       with torch.no_grad():
+           for batch in loader:
+               batch = batch.to(device)
+               model(batch)
+       handle.remove()
+       emb = torch.cat(captured, dim=0).numpy()
+       if len(emb) > max_points:
+           idx = np.random.choice(len(emb), max_points, replace=False)
+           emb = emb[idx]
+       return emb
+   ```
+
+   Note: the attribute `model.lin1` is the first FC layer in `BaseGATv2Net`.
+   Verify the exact attribute name in `aev_plig/models.py` before implementing.
+
+2. **`scripts/predict.py`** — after `save_results()`, inside `if args.wandb:`:
+
+   ```python
+   from aev_plig.prediction import load_model, extract_embeddings
+   first_model = load_model(args, model_cfg, device=args.device)
+   emb = extract_embeddings(first_model, test_loader, device=args.device)
+   log_evaluation_to_wandb(run, df, model_cfg, embeddings=emb)
+   ```
+
+   `test_loader` needs to be retained from `run_predictions()` — either
+   return it alongside the df, or re-construct it before this block.
+
+3. **`aev_plig/results.py`** — extend `log_evaluation_to_wandb` signature:
+
+   ```python
+   def log_evaluation_to_wandb(run, df, model_cfg, truth_col="pK",
+                               embeddings: np.ndarray | None = None) -> None:
+   ```
+
+   Add UMAP section at the end (inside the existing `try/except` plot block):
+
+   ```python
+   if embeddings is not None:
+       try:
+           import umap
+           import wandb as _wandb
+           reducer = umap.UMAP(n_components=2, random_state=42)
+           coords = reducer.fit_transform(embeddings)
+           n = len(coords)
+           # align embeddings with df rows (may be subsampled)
+           y_t = y_true[:n]; y_p = y_pred[:n]; err = abs_res[:n]
+           for label, values, colorscale in [
+               ("pK",    y_t,  "Viridis"),
+               ("error", err,  "Reds"),
+           ]:
+               fig = go.Figure(go.Scatter(
+                   x=coords[:, 0].tolist(), y=coords[:, 1].tolist(),
+                   mode="markers",
+                   marker=dict(color=values.tolist(), colorscale=colorscale,
+                               showscale=True, size=5, opacity=0.7),
+                   text=[f"{label}={v:.2f}" for v in values],
+               ))
+               fig.update_layout(
+                   xaxis_title="UMAP-1", yaxis_title="UMAP-2",
+                   title=f"Embedding UMAP coloured by {label}",
+               )
+               run.log({f"eval_umap_{label}": _wandb.Plotly(fig)})
+           # Uncertainty plot (Bayesian only)
+           var_col = "preds_var"
+           if var_col in pl_df.columns:
+               sigma = np.sqrt(pl_df[var_col].to_numpy()[:n])
+               fig_unc = go.Figure(go.Scatter(
+                   x=coords[:, 0].tolist(), y=coords[:, 1].tolist(),
+                   mode="markers",
+                   marker=dict(color=sigma.tolist(), colorscale="Plasma",
+                               showscale=True, size=5, opacity=0.7),
+               ))
+               fig_unc.update_layout(title="Embedding UMAP coloured by σ")
+               run.log({"eval_umap_uncertainty": _wandb.Plotly(fig_unc)})
+       except Exception:
+           pass
+   ```
+
+4. **`pyproject.toml`** — add `"umap-learn>=0.5.0"` to the `[wandb]` optional
+   dep group:
+
+   ```toml
+   wandb = ["wandb>=0.16.0", "uncertainty-toolbox>=0.1.0", "umap-learn>=0.5.0"]
+   ```
+
+#### New Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `umap-learn` | `>=0.5.0` | UMAP dimensionality reduction |
+
+#### Testing
+
+```bash
+# After training a quick model:
+aev-plig-predict \
+    --trained_model_name GATv2Net_TEST_... \
+    --dataset pdbbind \
+    --wandb --wandb_project aev-plig-dev
+
+# Check WandB run for:
+#   eval_umap_pK, eval_umap_error  (always)
+#   eval_umap_uncertainty           (Bayesian models only)
+```
+
+#### Related Files
+
+- `aev_plig/models.py` — check exact name of `lin1` (first FC layer)
+- `aev_plig/prediction.py` — add `load_model()` and `extract_embeddings()`
+- `aev_plig/results.py:208` — `log_evaluation_to_wandb()` signature + UMAP block
+- `scripts/predict.py` — call `extract_embeddings()` before `log_evaluation_to_wandb()`
+- `pyproject.toml` — add `umap-learn` to `[wandb]` optional dep
+
+
+
 ### Virtual Screening Support
 
 **Status**: Not yet planned
