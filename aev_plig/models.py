@@ -99,6 +99,19 @@ class BaseGATv2Net(torch.nn.Module, ABC):
             x = bn(x)
         return x
 
+    def _mlp_forward(self, x):
+        """Run input through fully connected layers with batch normalization."""
+        x = self.fc1(x)
+        x = self.activation(x)
+        x = self.bn_connect1(x)
+        x = self.fc2(x)
+        x = self.activation(x)
+        x = self.bn_connect2(x)
+        x = self.fc3(x)
+        x = self.activation(x)
+        x = self.bn_connect3(x)
+        return x
+
     @abstractmethod
     def _output_head(self, x):
         """Apply the final output head. Subclasses define their output layer(s)."""
@@ -121,16 +134,7 @@ class BaseGATv2Net(torch.nn.Module, ABC):
         # Global pooling (concatenate max and mean pooling)
         x = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
 
-        # Fully connected layers
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.bn_connect1(x)
-        x = self.fc2(x)
-        x = self.activation(x)
-        x = self.bn_connect2(x)
-        x = self.fc3(x)
-        x = self.activation(x)
-        x = self.bn_connect3(x)
+        x = self._mlp_forward(x)
 
         return self._output_head(x)
 
@@ -190,28 +194,28 @@ class GATv2NetMixedPrecision(GATv2Net):
     """
     Mixed precision GATv2Net.
 
-    Overrides _gnn_forward to disable autocast for GNN layers, avoiding
-    CUBLAS errors from fp16 lin_edge with small edge dimensions on V100.
-    MLP layers still run under the Trainer's autocast context (fp16).
+    GNN layers run in fp16 under the Trainer's autocast context.
+    MLP layers are forced to fp32 to avoid numerical instability in the
+    fully connected layers.
     """
 
-    def _gnn_forward(self, x, edge_index, edge_attr):
+    def _mlp_forward(self, x):
         with torch.amp.autocast('cuda', enabled=False):
-            return super()._gnn_forward(x.float(), edge_index, edge_attr.float())
+            return super()._mlp_forward(x.float())
 
 
 class GATv2NetBayesianMixedPrecision(GATv2NetBayesian):
     """
     Mixed precision Bayesian GATv2Net.
 
-    Overrides _gnn_forward to disable autocast for GNN layers, avoiding
-    CUBLAS errors from fp16 lin_edge with small edge dimensions on V100.
-    MLP layers still run under the Trainer's autocast context (fp16).
+    GNN layers run in fp16 under the Trainer's autocast context.
+    MLP layers are forced to fp32 to avoid numerical instability in the
+    fully connected layers.
     """
 
-    def _gnn_forward(self, x, edge_index, edge_attr):
+    def _mlp_forward(self, x):
         with torch.amp.autocast('cuda', enabled=False):
-            return super()._gnn_forward(x.float(), edge_index, edge_attr.float())
+            return super()._mlp_forward(x.float())
 
 
 # Model registry for easy model selection
