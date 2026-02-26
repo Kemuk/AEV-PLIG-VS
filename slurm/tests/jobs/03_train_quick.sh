@@ -23,6 +23,26 @@ source "$PROJECT_ROOT/slurm/config.sh"
 MODEL="${MODEL_NAME}"
 DATASET="${DATASET_NAME}"
 
+# Parse command-line arguments
+MODEL="${MODEL_NAME}"
+DATASET="${DATASET_NAME}"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
+        --dataset)
+            DATASET="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+
 # Hyperparameters (matching original training command)
 ACTIVATION="leaky_relu"
 BATCH_SIZE=128
@@ -97,7 +117,7 @@ train_cmd=(
     --model "${MODEL}"
     --dataset "${DATASET}"
     --seed "${SEED}"
-    --timestamp "${TIMESTAMP}"
+    --timestamp "TEST_${TIMESTAMP}"
     --activation_function "${ACTIVATION}"
     --batch_size "${BATCH_SIZE}"
     --epochs "${EPOCHS}"
