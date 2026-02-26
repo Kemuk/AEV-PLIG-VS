@@ -69,6 +69,7 @@ def main():
     train_data = load_split(args.dataset, "train")
     valid_data = load_split(args.dataset, "valid")
     test_data  = load_split(args.dataset, "test")
+    args.dataset_size = len(train_data)  # needed by GATv2NetBayesian (VBLL) constructor
 
     scaler_path = Path("data/processed") / args.dataset / "scaler.pickle"
     legacy_scaler = Path("data/processed") / f"{args.dataset}_scaler.pickle"
@@ -92,6 +93,7 @@ def main():
         "lr":                  args.lr,
         "batch_size":          args.batch_size,
         "timestamp":           timestamp,
+        "dataset_size":        args.dataset_size,
     }
     with open(output_dir / "config.json", 'w') as f:
         json.dump(config_dict, f, indent=2)

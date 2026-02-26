@@ -1,14 +1,13 @@
 """
-Integration tests for Bayesian model.
+Integration tests for the true Bayesian model (GATv2NetBayesian with VBLL).
 
-Minimal tests for GATv2NetBayesian:
-- Output shape (mean, var tuple)
-- Variance positivity
+GATv2NetBayesian uses a Variational Bayesian Last Layer (VBLL) to provide
+both epistemic and aleatoric uncertainty in a single sampling-free pass.
+Forward output is a VBLLReturn dataclass, not a (mean, var) tuple.
 """
 
 import pytest
 import torch
-import numpy as np
 import tempfile
 import shutil
 
@@ -21,18 +20,16 @@ from aev_plig.datasets import GraphDataset, init_weights
 
 @pytest.mark.integration
 class TestBayesianModel:
-    """Minimal tests for Bayesian model."""
+    """Tests for GATv2NetBayesian (VBLL)."""
 
     @pytest.fixture
     def temp_data_dir(self):
-        """Create a temporary directory for test data."""
         temp_dir = tempfile.mkdtemp()
         yield temp_dir
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     @pytest.fixture
     def test_dataset(self, sample_graphs_dict, sample_labels, temp_data_dir):
-        """Create a test dataset."""
         ids = list(sample_graphs_dict.keys())
         return GraphDataset(
             root=temp_data_dir,
@@ -45,38 +42,49 @@ class TestBayesianModel:
 
     @pytest.fixture
     def bayesian_model(self, mock_config, node_feature_dim, edge_feature_dim):
-        """Create Bayesian model for testing."""
         return get_model(
             'GATv2NetBayesian',
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
-            config=mock_config
+            config=mock_config,
+            dataset_size=100,
         )
 
-    def test_bayesian_output_shape(self, bayesian_model, test_dataset, device):
-        """Test that Bayesian model returns (mean, var) tuple with correct shapes."""
+    def test_bayesian_output_is_vbll_return(self, bayesian_model, test_dataset, device):
+        """Test that GATv2NetBayesian returns a VBLLReturn dataclass, not a tuple."""
         bayesian_model.to(device)
         bayesian_model.eval()
 
         loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-        batch = next(iter(loader))
-        batch = batch.to(device)
+        batch = next(iter(loader)).to(device)
 
         with torch.no_grad():
             output = bayesian_model(batch)
 
-        # Should return a tuple of (mean, var)
-        assert isinstance(output, tuple), "Output should be a tuple"
-        assert len(output) == 2, "Output tuple should have 2 elements (mean, var)"
+        assert not isinstance(output, tuple), "VBLL output should not be a tuple"
+        assert hasattr(output, 'predictive'), "VBLL output must have .predictive attribute"
+        assert hasattr(output, 'train_loss_fn'), "VBLL output must have .train_loss_fn"
 
-        mean, var = output
+    def test_bayesian_predictive_mean_shape(self, bayesian_model, test_dataset, device):
+        """Test that predictive.mean has shape (batch, 1)."""
+        bayesian_model.to(device)
+        bayesian_model.eval()
 
-        # Check shapes
-        assert mean.shape == (1, 1), f"Mean shape should be (1, 1), got {mean.shape}"
-        assert var.shape == (1, 1), f"Variance shape should be (1, 1), got {var.shape}"
+        loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+        batch = next(iter(loader)).to(device)
+
+        with torch.no_grad():
+            output = bayesian_model(batch)
+
+        assert output.predictive.mean.shape == (1, 1), (
+            f"Expected shape (1, 1), got {output.predictive.mean.shape}"
+        )
+        assert output.predictive.variance.shape == (1, 1), (
+            f"Expected shape (1, 1), got {output.predictive.variance.shape}"
+        )
 
     def test_variance_positivity(self, bayesian_model, test_dataset, device):
-        """Test that variance is always positive."""
+        """Test that predictive.variance is always positive."""
         bayesian_model.to(device)
         bayesian_model.apply(init_weights)
         bayesian_model.eval()
@@ -86,9 +94,9 @@ class TestBayesianModel:
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(device)
-                mean, var = bayesian_model(batch)
+                output = bayesian_model(batch)
+                var = output.predictive.variance
 
-                # Variance must be strictly positive
                 assert (var > 0).all(), f"Variance must be positive, got {var}"
                 assert not torch.isnan(var).any(), "Variance contains NaN"
                 assert not torch.isinf(var).any(), "Variance contains Inf"
@@ -103,13 +111,13 @@ class TestBayesianModel:
             'GATv2NetBayesian',
             node_feature_dim=node_dim,
             edge_feature_dim=edge_dim,
-            config=mock_config
+            config=mock_config,
+            dataset_size=500,
         )
         model.to(device)
         model.apply(init_weights)
         model.eval()
 
-        # Test with multiple random graphs
         for seed in [42, 123, 456]:
             torch.manual_seed(seed)
 
@@ -117,7 +125,6 @@ class TestBayesianModel:
             for i in range(batch_size):
                 num_nodes = 10 + i * 3
                 num_edges = 20 + i * 6
-
                 data = Data(
                     x=torch.randn(num_nodes, node_dim),
                     edge_index=torch.randint(0, num_nodes, (2, num_edges)),
@@ -127,42 +134,75 @@ class TestBayesianModel:
                 data_list.append(data)
 
             loader = DataLoader(data_list, batch_size=batch_size, shuffle=False)
-            batch = next(iter(loader))
-            batch = batch.to(device)
+            batch = next(iter(loader)).to(device)
 
             with torch.no_grad():
-                mean, var = model(batch)
+                output = model(batch)
 
-            # All variances must be positive
-            assert (var > 0).all(), f"Seed {seed}: Variance must be positive, got min={var.min()}"
+            var = output.predictive.variance
+            assert (var > 0).all(), f"Seed {seed}: variance must be positive, min={var.min()}"
+
+    def test_train_loss_fn(self, bayesian_model, test_dataset, device):
+        """Test that train_loss_fn returns a scalar tensor."""
+        bayesian_model.to(device)
+        bayesian_model.train()
+
+        loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+        batch = next(iter(loader)).to(device)
+
+        output = bayesian_model(batch)
+        target = batch.y.view(-1, 1).to(device)
+        loss = output.train_loss_fn(target)
+
+        assert loss.ndim == 0, "train_loss_fn should return a scalar tensor"
+        assert not torch.isnan(loss), "train_loss_fn returned NaN"
+        assert not torch.isinf(loss), "train_loss_fn returned Inf"
 
     def test_bayesian_model_in_registry(self):
         """Test that GATv2NetBayesian is in the model registry."""
         from aev_plig.models import MODEL_REGISTRY, list_models
 
         assert 'GATv2NetBayesian' in MODEL_REGISTRY
+        assert MODEL_REGISTRY['GATv2NetBayesian'] is GATv2NetBayesian
         assert 'GATv2NetBayesian' in list_models()
 
     def test_bayesian_model_differentiable(self, bayesian_model, test_dataset, device):
-        """Test that both mean and variance are differentiable."""
+        """Test that the VBLL loss is differentiable."""
         bayesian_model.to(device)
         bayesian_model.train()
 
         loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-        batch = next(iter(loader))
-        batch = batch.to(device)
+        batch = next(iter(loader)).to(device)
 
-        mean, var = bayesian_model(batch)
-
-        # Both outputs should be differentiable
-        loss = mean.mean() + var.mean()
+        output = bayesian_model(batch)
+        target = batch.y.view(-1, 1).to(device)
+        loss = output.train_loss_fn(target)
         loss.backward()
 
-        # Check that gradients exist
-        has_grad = False
-        for param in bayesian_model.parameters():
-            if param.grad is not None:
-                has_grad = True
-                break
-
+        has_grad = any(p.grad is not None for p in bayesian_model.parameters())
         assert has_grad, "Model should have gradients after backward pass"
+
+    def test_is_bayesian_flag(self, mock_config, node_feature_dim, edge_feature_dim):
+        """Test that is_bayesian=True for VBLL model."""
+        model = get_model(
+            'GATv2NetBayesian',
+            node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
+            config=mock_config,
+            dataset_size=100,
+        )
+        assert model.is_bayesian is True
+
+    def test_predict_method_returns_tensor(self, bayesian_model, test_dataset, device):
+        """Test that predict() returns a plain tensor (not VBLLReturn)."""
+        bayesian_model.to(device)
+        bayesian_model.eval()
+
+        loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+        batch = next(iter(loader)).to(device)
+
+        with torch.no_grad():
+            pred = bayesian_model.predict(batch)
+
+        assert isinstance(pred, torch.Tensor), "predict() should return a tensor"
+        assert pred.shape == (1, 1), f"Expected (1,1), got {pred.shape}"

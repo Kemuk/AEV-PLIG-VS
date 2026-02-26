@@ -391,7 +391,10 @@ class Predictor:
                     data = data.to(self.device)
                     with autocast('cuda', enabled=self.use_amp):
                         if is_bayesian:
-                            mean_out, var_out = model.forward(data)
+                            # VBLL model: extract mean and variance from VBLLReturn
+                            vbll_out = model.forward(data)
+                            mean_out = vbll_out.predictive.mean
+                            var_out  = vbll_out.predictive.variance
                         else:
                             mean_out = model.predict(data)
                     total_preds = torch.cat((total_preds, mean_out), 0)
