@@ -1,12 +1,13 @@
 import marimo
 
-__generated_with = "0.10.0"
+__generated_with = "0.20.2"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
@@ -25,31 +26,38 @@ def _():
     from scipy.stats import kendalltau as scipy_kendalltau
 
     from aev_plig import results
-    return erf, ff, go, make_subplots, np, pl, px, re, results, scipy_kendalltau, uct
+
+    return (
+        erf,
+        go,
+        make_subplots,
+        np,
+        pl,
+        px,
+        re,
+        results,
+        scipy_kendalltau,
+        uct,
+    )
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # AEV-PLIG Results Analysis
-        Multi-model accuracy · ensemble agreement · uncertainty calibration · ranking · outliers
-        """
-    )
+    mo.md(r"""
+    # AEV-PLIG Results Analysis
+    Multi-model accuracy · ensemble agreement · uncertainty calibration · ranking · outliers
+    """)
     return
 
 
-# ---------------------------------------------------------------------------
-# CONFIG — edit this cell to switch datasets or models; everything reruns
-# ---------------------------------------------------------------------------
 @app.cell
 def _():
     TRAINED_MODEL_NAMES = [
         "model_GATv2Net_ligsim90_fep_benchmark",
-        # "model_GATv2NetBayesian_...",
+        "GATv2NetBayesianMixedPrecision_2026-02-27_01-00",
         # "model_GATv2NetMixedPrecision_...",
     ]
-    DATA_NAME          = "fep_benchmark"
+    DATA_NAME          = "pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"
     TRUTH_COL          = "pK"
     PRED_COL           = "preds"
     UID_COL            = "unique_id"
@@ -58,7 +66,6 @@ def _():
     FIG_DIR            = None   # set to a Path to auto-save HTML figures
     return (
         DATA_NAME,
-        FIG_DIR,
         MIN_TARGET_SAMPLES,
         PRED_COL,
         TOP_N_OUTLIERS,
@@ -68,11 +75,8 @@ def _():
     )
 
 
-# ---------------------------------------------------------------------------
-# Load predictions and compute derived columns
-# ---------------------------------------------------------------------------
 @app.cell
-def _(DATA_NAME, PRED_COL, TRUTH_COL, TRAINED_MODEL_NAMES, np, pl, re, results):
+def _(DATA_NAME, PRED_COL, TRAINED_MODEL_NAMES, TRUTH_COL, pl, re, results):
     df = results.load_all_predictions(TRAINED_MODEL_NAMES, data_name=DATA_NAME)
 
     # Auto-detect ensemble member columns (preds_0, preds_1, ...)
@@ -111,16 +115,15 @@ def _(DATA_NAME, PRED_COL, TRUTH_COL, TRAINED_MODEL_NAMES, np, pl, re, results):
     if TRUTH_COL in df.columns:
         df = df.with_columns((pl.col(PRED_COL) - pl.col(TRUTH_COL)).alias("residual"))
 
-    df.head(3)
-    return df, is_bayesian_output, n_models, pred_member_cols, var_member_cols
+    df
+    return df, is_bayesian_output, pred_member_cols
 
 
-# ---------------------------------------------------------------------------
-# §1  Data Overview
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("## §1 Data Overview")
+    mo.md("""
+    ## §1 Data Overview
+    """)
     return
 
 
@@ -176,18 +179,13 @@ def _(PRED_COL, TRUTH_COL, clean, pl, px):
     return
 
 
-# ---------------------------------------------------------------------------
-# §2  Ensemble Member Metrics
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## §2 Ensemble Member Metrics
-        RMSE, Pearson R, and Kendall τ for every ensemble member and the ensemble average,
-        grouped by `trained_model_name` when multiple model runs are loaded.
-        """
-    )
+    mo.md(r"""
+    ## §2 Ensemble Member Metrics
+    RMSE, Pearson R, and Kendall τ for every ensemble member and the ensemble average,
+    grouped by `trained_model_name` when multiple model runs are loaded.
+    """)
     return
 
 
@@ -244,22 +242,17 @@ def _(metrics_df):
     return
 
 
-# ---------------------------------------------------------------------------
-# §3  Predicted vs True
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## §3 Predicted vs True
-        Colour shows epistemic std (ensemble disagreement).
-        """
-    )
+    mo.md(r"""
+    ## §3 Predicted vs True
+    Colour shows epistemic std (ensemble disagreement).
+    """)
     return
 
 
 @app.cell
-def _(PRED_COL, TRUTH_COL, UID_COL, df, go, px):
+def _(PRED_COL, TRUTH_COL, UID_COL, df, px):
     def _plot_pred_vs_true(
         _df,
         truth_col,
@@ -314,12 +307,11 @@ def _(PRED_COL, TRUTH_COL, UID_COL, df, go, px):
     return
 
 
-# ---------------------------------------------------------------------------
-# §4  Residual Analysis
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("## §4 Residual Analysis")
+    mo.md("""
+    ## §4 Residual Analysis
+    """)
     return
 
 
@@ -351,27 +343,22 @@ def _(TRUTH_COL, UID_COL, df, go, make_subplots):
     return
 
 
-# ---------------------------------------------------------------------------
-# §5  Uncertainty Calibration
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## §5 Uncertainty Calibration
+    mo.md(r"""
+    ## §5 Uncertainty Calibration
 
-        **Epistemic std** = std dev of the N ensemble checkpoint predictions (`std(preds_0…N)`).
-        Valid for all model types.
+    **Epistemic std** = std dev of the N ensemble checkpoint predictions (`std(preds_0…N)`).
+    Valid for all model types.
 
-        **Aleatoric std** *(Bayesian models only)* = `sqrt(mean(var_0…N))`, where each `var_i`
-        is the variance from the model's `logvar_head`.
+    **Aleatoric std** *(Bayesian models only)* = `sqrt(mean(var_0…N))`, where each `var_i`
+    is the variance from the model's `logvar_head`.
 
-        Diagnostics shown:
-        1. **Reliability diagram** — mean |error| per uncertainty bin; good calibration is monotone
-        2. **Sparsification curve** — RMSE as uncertain predictions are included
-        3. **Prediction interval coverage** — fraction of true values within ±kσ vs Gaussian ideal
-        """
-    )
+    Diagnostics shown:
+    1. **Reliability diagram** — mean |error| per uncertainty bin; good calibration is monotone
+    2. **Sparsification curve** — RMSE as uncertain predictions are included
+    3. **Prediction interval coverage** — fraction of true values within ±kσ vs Gaussian ideal
+    """)
     return
 
 
@@ -388,7 +375,7 @@ def _(df, pl):
 
 
 @app.cell
-def _(np, erf, go, df_typed, pl, px):
+def _(df_typed, go, np, pl, px):
     def _reliability_diagram(unc, abs_err, n_bins=10):
         bin_edges = np.percentile(unc, np.linspace(0, 100, n_bins + 1))
         bin_idx   = np.searchsorted(bin_edges[1:-1], unc)
@@ -433,7 +420,7 @@ def _(np, erf, go, df_typed, pl, px):
 
 
 @app.cell
-def _(np, df_typed, go, pl):
+def _(df_typed, go, np, pl):
     def _sparsification_curve(unc, residuals):
         order = np.argsort(unc)
         sq_err_sorted = residuals[order] ** 2
@@ -463,7 +450,7 @@ def _(np, df_typed, go, pl):
 
 
 @app.cell
-def _(erf, np, df_typed, go, pl):
+def _(df_typed, erf, go, np, pl):
     def _interval_coverage(unc, residuals):
         k_vals = np.array([0.5, 1.0, 1.5, 2.0])
         obs_cov = (
@@ -504,7 +491,7 @@ def _(erf, np, df_typed, go, pl):
 
 
 @app.cell
-def _(df, go, np, pl, uct):
+def _(df, np, pl, uct):
     def _risk_coverage_auc(unc, residuals):
         order = np.argsort(unc)
         res_sorted = residuals[order]
@@ -611,17 +598,12 @@ def _(df, go, np, pl):
     return
 
 
-# ---------------------------------------------------------------------------
-# §6  Per-Target Kendall τ
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## §6 Per-Target Kendall τ (Ranking Ability)
-        Each `unique_id` is treated as its own target.
-        """
-    )
+    mo.md(r"""
+    ## §6 Per-Target Kendall τ (Ranking Ability)
+    Each `unique_id` is treated as its own target.
+    """)
     return
 
 
@@ -658,17 +640,24 @@ def _(MIN_TARGET_SAMPLES, PRED_COL, TRUTH_COL, UID_COL, df, results):
     return
 
 
-# ---------------------------------------------------------------------------
-# §7  Outlier Table
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("## §7 Outlier Table")
+    mo.md("""
+    ## §7 Outlier Table
+    """)
     return
 
 
 @app.cell
-def _(PRED_COL, TOP_N_OUTLIERS, TRUTH_COL, UID_COL, df, is_bayesian_output, pl):
+def _(
+    PRED_COL,
+    TOP_N_OUTLIERS,
+    TRUTH_COL,
+    UID_COL,
+    df,
+    is_bayesian_output,
+    pl,
+):
     _outlier_cols = (
         [UID_COL, TRUTH_COL, PRED_COL, "residual", "epistemic_std"]
         + (["aleatoric_std"] if is_bayesian_output else [])
@@ -684,12 +673,11 @@ def _(PRED_COL, TOP_N_OUTLIERS, TRUTH_COL, UID_COL, df, is_bayesian_output, pl):
     return
 
 
-# ---------------------------------------------------------------------------
-# §8  Success Rate
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("## §8 Success Rate")
+    mo.md("""
+    ## §8 Success Rate
+    """)
     return
 
 
