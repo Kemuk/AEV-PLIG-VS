@@ -169,11 +169,22 @@ class Trainer:
             weight_decay = Config.WEIGHT_DECAY
 
         if optimizer is None:
-            self.optimizer = torch.optim.Adam(
-                model.parameters(),
-                lr=learning_rate,
-                weight_decay=weight_decay
-            )
+            if model.is_bayesian:
+                # VBLL: disable weight decay on the variational last layer —
+                # it has its own KL regularisation and extra weight decay hurts.
+                vbll_params = list(model.vbll_head.parameters())
+                vbll_ids = {id(p) for p in vbll_params}
+                other_params = [p for p in model.parameters() if id(p) not in vbll_ids]
+                self.optimizer = torch.optim.Adam([
+                    {"params": other_params, "weight_decay": weight_decay},
+                    {"params": vbll_params,  "weight_decay": 0.0},
+                ], lr=learning_rate)
+            else:
+                self.optimizer = torch.optim.Adam(
+                    model.parameters(),
+                    lr=learning_rate,
+                    weight_decay=weight_decay
+                )
         else:
             self.optimizer = optimizer
 
@@ -221,14 +232,21 @@ class Trainer:
                 output = self.model(data)
                 target = data.y.view(-1, 1).to(self.device)
 
-                # Auto-detect Bayesian model (returns tuple)
-                if isinstance(output, tuple):
+                if self.model.is_bayesian:
+                    # VBLL model: use ELBO loss from VBLLReturn dataclass
+                    loss = output.train_loss_fn(target)
+                elif isinstance(output, tuple):
+                    # GATv2NetAleatoric: Gaussian NLL over (mean, var) tuple
                     mean, var = output
                     loss = gaussian_nll_loss(mean, var, target)
                 else:
                     loss = self.loss_fn(output, target)
 
             self.scaler.scale(loss).backward()
+            if self.model.is_bayesian:
+                # VBLL: unscale then clip to stabilise covariance optimisation
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
             total_loss += (loss.item() * len(data.y))
@@ -267,9 +285,10 @@ class Trainer:
                 with autocast('cuda', enabled=self.use_amp):
                     output = self.model(data)
 
-                # Auto-detect Bayesian model (returns tuple)
-                if isinstance(output, tuple):
-                    mean, var = output
+                if self.model.is_bayesian:
+                    total_preds = torch.cat((total_preds, output.predictive.mean.cpu()), 0)
+                elif isinstance(output, tuple):
+                    mean, _ = output
                     total_preds = torch.cat((total_preds, mean.cpu()), 0)
                 else:
                     total_preds = torch.cat((total_preds, output.cpu()), 0)
@@ -372,12 +391,16 @@ class Trainer:
                 with autocast('cuda', enabled=self.use_amp):
                     output = self.model(data)
 
-                # Auto-detect Bayesian model (returns tuple)
-                if isinstance(output, tuple):
+                if self.model.is_bayesian:
+                    is_bayesian = True
+                    total_preds = torch.cat((total_preds, output.predictive.mean.cpu()), 0)
+                    total_vars  = torch.cat((total_vars,  output.predictive.variance.cpu()), 0)
+                elif isinstance(output, tuple):
+                    # GATv2NetAleatoric: still collect variance for calibration metrics
                     is_bayesian = True
                     mean, var = output
                     total_preds = torch.cat((total_preds, mean.cpu()), 0)
-                    total_vars = torch.cat((total_vars, var.cpu()), 0)
+                    total_vars  = torch.cat((total_vars,  var.cpu()), 0)
                 else:
                     total_preds = torch.cat((total_preds, output.cpu()), 0)
 

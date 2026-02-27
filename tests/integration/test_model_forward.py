@@ -15,7 +15,8 @@ from torch_geometric.data import Data
 
 from aev_plig.models import (
     get_model, list_models, MODEL_REGISTRY, BaseGATv2Net, GATv2Net,
-    GATv2NetBayesian, GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision,
+    GATv2NetAleatoric, GATv2NetBayesian, GATv2NetMixedPrecision,
+    GATv2NetBayesianMixedPrecision,
 )
 from aev_plig.datasets import GraphDataset, init_weights
 
@@ -233,19 +234,20 @@ class TestMixedPrecisionModelForward:
     def test_all_models_inherit_base(self):
         """Test all model classes inherit from BaseGATv2Net."""
         assert issubclass(GATv2Net, BaseGATv2Net)
+        assert issubclass(GATv2NetAleatoric, BaseGATv2Net)
         assert issubclass(GATv2NetBayesian, BaseGATv2Net)
         assert issubclass(GATv2NetMixedPrecision, BaseGATv2Net)
         assert issubclass(GATv2NetBayesianMixedPrecision, BaseGATv2Net)
 
     def test_mp_models_share_base_forward(self):
-        """Test MP models share forward with their parent (only _gnn_forward differs)."""
+        """Test MP models share forward with their parent."""
         assert GATv2NetMixedPrecision.forward is GATv2Net.forward
         assert GATv2NetBayesianMixedPrecision.forward is GATv2NetBayesian.forward
 
-    def test_mp_models_override_gnn_forward(self):
-        """Test MP models override _gnn_forward to disable autocast."""
-        assert GATv2NetMixedPrecision._gnn_forward is not GATv2Net._gnn_forward
-        assert GATv2NetBayesianMixedPrecision._gnn_forward is not GATv2NetBayesian._gnn_forward
+    def test_mp_models_override_mlp_forward(self):
+        """Test MP models override _mlp_forward to force fp32 in MLP layers."""
+        assert GATv2NetMixedPrecision._mlp_forward is not GATv2Net._mlp_forward
+        assert GATv2NetBayesianMixedPrecision._mlp_forward is not GATv2NetBayesian._mlp_forward
 
     def test_mp_model_forward_on_cpu(self, mock_config, node_feature_dim, edge_feature_dim, test_dataset, device):
         """Test mixed precision model forward pass works on CPU."""
@@ -268,12 +270,13 @@ class TestMixedPrecisionModelForward:
         assert not torch.isnan(output).any()
 
     def test_mp_bayesian_model_forward_on_cpu(self, mock_config, node_feature_dim, edge_feature_dim, test_dataset, device):
-        """Test mixed precision Bayesian model forward pass on CPU."""
+        """Test mixed precision VBLL Bayesian model forward pass on CPU."""
         model = get_model(
             'GATv2NetBayesianMixedPrecision',
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
-            config=mock_config
+            config=mock_config,
+            dataset_size=100,
         )
         model.to(device)
         model.eval()
@@ -284,8 +287,8 @@ class TestMixedPrecisionModelForward:
         with torch.no_grad():
             output = model(batch)
 
-        assert isinstance(output, tuple)
-        mean, var = output
-        assert mean.shape == (1, 1)
-        assert var.shape == (1, 1)
-        assert (var > 0).all()
+        # GATv2NetBayesianMixedPrecision is now VBLL: returns VBLLReturn, not a tuple
+        assert not isinstance(output, tuple), "VBLL output should not be a tuple"
+        assert output.predictive.mean.shape == (1, 1)
+        assert output.predictive.variance.shape == (1, 1)
+        assert (output.predictive.variance > 0).all()

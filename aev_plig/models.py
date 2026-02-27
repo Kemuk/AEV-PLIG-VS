@@ -164,14 +164,18 @@ class GATv2Net(BaseGATv2Net):
         return self.forward(data)
 
 
-class GATv2NetBayesian(BaseGATv2Net):
+class GATv2NetAleatoric(BaseGATv2Net):
     """
-    Bayesian Graph Attention Network v2 for protein-ligand binding affinity prediction.
+    Aleatoric uncertainty GATv2Net for protein-ligand binding affinity prediction.
 
-    Output: (mean, variance) tuple for uncertainty quantification
+    Captures aleatoric (data) uncertainty only via a heteroscedastic NLL head.
+    Both output heads are deterministic point estimates — this model is NOT
+    Bayesian and does not estimate epistemic (model) uncertainty.
+
+    Output: (mean, variance) tuple
     """
 
-    is_bayesian: bool = True
+    is_bayesian: bool = False
 
     def __init__(self, node_feature_dim, edge_feature_dim, config=None):
         super().__init__(node_feature_dim, edge_feature_dim, config)
@@ -204,9 +208,48 @@ class GATv2NetMixedPrecision(GATv2Net):
             return super()._mlp_forward(x.float())
 
 
+class GATv2NetBayesian(BaseGATv2Net):
+    """
+    True Bayesian GATv2Net via Variational Bayesian Last Layer (VBLL, ICLR 2024).
+
+    Same backbone as GATv2Net, but the final output head is replaced with
+    vbll.Regression — a variational posterior over last-layer weights.
+    Provides both epistemic uncertainty (reducible with more data) via the
+    weight posterior and aleatoric uncertainty via the Wishart noise covariance,
+    in a single sampling-free forward pass.
+
+    Forward returns a VBLLReturn dataclass:
+        out.predictive.mean      Posterior-predictive mean, shape (batch, 1)
+        out.predictive.variance  Total uncertainty (epistemic + aleatoric)
+        out.train_loss_fn(y)     ELBO loss — use during training
+        out.val_loss_fn(y)       Log-likelihood — use for monitoring/early stopping
+    """
+
+    is_bayesian: bool = True
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None, dataset_size=None):
+        super().__init__(node_feature_dim, edge_feature_dim, config)
+        if dataset_size is None:
+            dataset_size = getattr(config, 'dataset_size', 1000) if config else 1000
+        import vbll
+        mlp_dims = Config.MLP_DIMS
+        self.vbll_head = vbll.Regression(
+            in_features=mlp_dims[2],
+            out_features=1,
+            regularization_weight=1.0 / dataset_size,
+        )
+
+    def _output_head(self, x):
+        return self.vbll_head(x)
+
+    def predict(self, data):
+        """Return posterior-predictive mean for inference."""
+        return self.forward(data).predictive.mean
+
+
 class GATv2NetBayesianMixedPrecision(GATv2NetBayesian):
     """
-    Mixed precision Bayesian GATv2Net.
+    Mixed precision VBLL Bayesian GATv2Net.
 
     GNN layers run in fp16 under the Trainer's autocast context.
     MLP layers are forced to fp32 to avoid numerical instability in the
@@ -220,9 +263,10 @@ class GATv2NetBayesianMixedPrecision(GATv2NetBayesian):
 
 # Model registry for easy model selection
 MODEL_REGISTRY = {
-    'GATv2Net': GATv2Net,
-    'GATv2NetBayesian': GATv2NetBayesian,
-    'GATv2NetMixedPrecision': GATv2NetMixedPrecision,
+    'GATv2Net':                       GATv2Net,
+    'GATv2NetAleatoric':              GATv2NetAleatoric,
+    'GATv2NetBayesian':               GATv2NetBayesian,
+    'GATv2NetMixedPrecision':         GATv2NetMixedPrecision,
     'GATv2NetBayesianMixedPrecision': GATv2NetBayesianMixedPrecision,
 }
 
