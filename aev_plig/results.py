@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import numpy as np
@@ -26,67 +25,68 @@ def load_predictions(path: str) -> pl.DataFrame:
 
 
 def load_all_predictions(
-    directory: str | Path,
-    prediction_file_name: str,
-    path_regex: str | None = (
-        r"(?P<model_name>[^/\\]+)[/\\]"
-        r"(?P<model_instance>[^/\\]+)[/\\]"
-        r"[^/\\]+"
-    ),
+    trained_model_names: list[str],
+    data_name: str,
+    predictions_dir: str | Path | None = None,
+    trained_models_dir: str | Path | None = None,
 ) -> pl.DataFrame:
-    """Recursively find ``{prediction_file_name}.parquet`` under *directory*.
+    """Load prediction parquets for a list of trained model names.
 
-    Intended for comparing multiple model architectures/instances on the same
-    benchmark dataset.  The *prediction_file_name* is the dataset stem produced
-    by ``scripts/predict.py``, e.g.::
+    For each name, reads ``{trained_models_dir}/{name}/config.json`` to infer
+    the architecture (``model_name``), then loads::
 
-        "pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark_predictions"
+        {predictions_dir}/{model_name}/{name}/{data_name}_predictions.parquet
 
-    Under the standard output layout::
-
-        {directory}/{model_name}/{model_instance}/{prediction_file_name}.parquet
-
-    Named capture groups in *path_regex* (applied to each file's path relative
-    to *directory*, always forward-slash separated) become additional columns.
+    Adds provenance columns ``model_name`` and ``trained_model_name`` to each
+    loaded frame before concatenating.
 
     Parameters
     ----------
-    directory:
-        Root directory to scan (e.g. ``"output/predictions"``).
-    prediction_file_name:
-        Stem of the target parquet file (no extension, no wildcards).
-    path_regex:
-        Regex with named groups applied to the relative path; ``None`` disables
-        provenance parsing.
+    trained_model_names:
+        List of trained model directory names (e.g.
+        ``["model_GATv2Net_run1", "model_GATv2NetBayesian_run2"]``).
+    data_name:
+        Dataset stem used when saving predictions, e.g. ``"fep_benchmark"``.
+    predictions_dir:
+        Root predictions directory. Defaults to ``Config.PREDICTIONS_DIR``.
+    trained_models_dir:
+        Root trained-models directory. Defaults to ``Config.TRAINED_MODELS_DIR``.
 
     Raises
     ------
     FileNotFoundError
-        If *directory* does not exist or no matching parquet files are found.
+        If ``predictions_dir`` does not exist or a parquet file is not found.
+    ValueError
+        If ``trained_model_names`` is empty.
     """
-    root = Path(directory)
-    if not root.exists():
-        raise FileNotFoundError(f"Predictions directory not found: {root}")
+    import json as _json
 
-    glob_pattern = f"**/{prediction_file_name}.parquet"
-    files = sorted(root.glob(glob_pattern))
-    if not files:
-        raise FileNotFoundError(
-            f"No files matching '{glob_pattern}' found under {root}"
-        )
+    from aev_plig.config import Config
 
-    compiled = re.compile(path_regex) if path_regex else None
+    if not trained_model_names:
+        raise ValueError("trained_model_names list is empty")
+
+    pred_root = Path(predictions_dir or Config.PREDICTIONS_DIR)
+    models_root = Path(trained_models_dir or Config.TRAINED_MODELS_DIR)
+
+    if not pred_root.exists():
+        raise FileNotFoundError(f"Predictions directory not found: {pred_root}")
+
     frames: list[pl.DataFrame] = []
-    for f in files:
-        frame = pl.read_parquet(f)
+    for name in trained_model_names:
+        cfg_path = models_root / name / "config.json"
+        if cfg_path.exists():
+            with open(cfg_path) as fh:
+                model_name = _json.load(fh).get("model", Config.MODEL_NAME)
+        else:
+            model_name = Config.MODEL_NAME
 
-        if compiled is not None:
-            rel = f.relative_to(root).as_posix()
-            m = compiled.search(rel)
-            if m:
-                for col_name, col_val in m.groupdict().items():
-                    frame = frame.with_columns(pl.lit(col_val or "").alias(col_name))
-
+        parquet_path = pred_root / model_name / name / f"{data_name}_predictions.parquet"
+        frame = load_predictions(str(parquet_path))
+        frame = frame.with_columns(
+            pl.lit(model_name).alias("model_name"),
+            pl.lit(name).alias("trained_model_name"),
+        )
         frames.append(frame)
 
     return pl.concat(frames, how="diagonal_relaxed")

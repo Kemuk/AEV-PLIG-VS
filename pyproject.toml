@@ -46,6 +46,7 @@ dependencies = [
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.16.0", "uncertainty-toolbox>=0.1.0"]
+notebooks = ["marimo>=0.10", "uncertainty-toolbox>=0.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/Jnelen/AEV-PLIG"
