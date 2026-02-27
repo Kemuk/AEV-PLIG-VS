@@ -1,13 +1,12 @@
 import marimo
 
-__generated_with = "0.20.2"
+__generated_with = "0.10.0"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
     import marimo as mo
-
     return (mo,)
 
 
@@ -26,38 +25,31 @@ def _():
     from scipy.stats import kendalltau as scipy_kendalltau
 
     from aev_plig import results
-
-    return (
-        erf,
-        go,
-        make_subplots,
-        np,
-        pl,
-        px,
-        re,
-        results,
-        scipy_kendalltau,
-        uct,
-    )
+    return erf, ff, go, make_subplots, np, pl, px, re, results, scipy_kendalltau, uct
 
 
 @app.cell
 def _(mo):
-    mo.md(r"""
-    # AEV-PLIG Results Analysis
-    Multi-model accuracy · ensemble agreement · uncertainty calibration · ranking · outliers
-    """)
+    mo.md(
+        r"""
+        # AEV-PLIG Results Analysis
+        Multi-model accuracy · ensemble agreement · uncertainty calibration · ranking · outliers
+        """
+    )
     return
 
 
+# ---------------------------------------------------------------------------
+# CONFIG — edit this cell to switch datasets or models; everything reruns
+# ---------------------------------------------------------------------------
 @app.cell
 def _():
     TRAINED_MODEL_NAMES = [
         "model_GATv2Net_ligsim90_fep_benchmark",
-        "GATv2NetBayesianMixedPrecision_2026-02-27_01-00",
+        # "model_GATv2NetBayesian_...",
         # "model_GATv2NetMixedPrecision_...",
     ]
-    DATA_NAME          = "pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"
+    DATA_NAME          = "fep_benchmark"
     TRUTH_COL          = "pK"
     PRED_COL           = "preds"
     UID_COL            = "unique_id"
@@ -66,6 +58,7 @@ def _():
     FIG_DIR            = None   # set to a Path to auto-save HTML figures
     return (
         DATA_NAME,
+        FIG_DIR,
         MIN_TARGET_SAMPLES,
         PRED_COL,
         TOP_N_OUTLIERS,
@@ -75,8 +68,11 @@ def _():
     )
 
 
+# ---------------------------------------------------------------------------
+# Load predictions and compute derived columns
+# ---------------------------------------------------------------------------
 @app.cell
-def _(DATA_NAME, PRED_COL, TRAINED_MODEL_NAMES, TRUTH_COL, pl, re, results):
+def _(DATA_NAME, PRED_COL, TRUTH_COL, TRAINED_MODEL_NAMES, np, pl, re, results):
     df = results.load_all_predictions(TRAINED_MODEL_NAMES, data_name=DATA_NAME)
 
     # Auto-detect ensemble member columns (preds_0, preds_1, ...)
@@ -111,19 +107,32 @@ def _(DATA_NAME, PRED_COL, TRAINED_MODEL_NAMES, TRUTH_COL, pl, re, results):
     if is_bayesian_output:
         df = df.with_columns(pl.col("var").sqrt().alias("aleatoric_std"))
 
+    # Predictive std — the uncertainty used for calibration plots:
+    #   Non-Bayesian: ensemble std (epistemic only)
+    #   Bayesian:     sqrt(aleatoric² + epistemic²) — total predictive uncertainty
+    if is_bayesian_output:
+        df = df.with_columns(
+            (pl.col("aleatoric_std").pow(2) + pl.col("epistemic_std").pow(2))
+            .sqrt()
+            .alias("predictive_std")
+        )
+    else:
+        df = df.with_columns(pl.col("epistemic_std").alias("predictive_std"))
+
     # Residual (signed: predicted − true)
     if TRUTH_COL in df.columns:
         df = df.with_columns((pl.col(PRED_COL) - pl.col(TRUTH_COL)).alias("residual"))
 
-    df
-    return df, is_bayesian_output, pred_member_cols
+    df.head(3)
+    return df, is_bayesian_output, n_models, pred_member_cols, var_member_cols
 
 
+# ---------------------------------------------------------------------------
+# §1  Data Overview
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("""
-    ## §1 Data Overview
-    """)
+    mo.md("## §1 Data Overview")
     return
 
 
@@ -179,13 +188,18 @@ def _(PRED_COL, TRUTH_COL, clean, pl, px):
     return
 
 
+# ---------------------------------------------------------------------------
+# §2  Ensemble Member Metrics
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""
-    ## §2 Ensemble Member Metrics
-    RMSE, Pearson R, and Kendall τ for every ensemble member and the ensemble average,
-    grouped by `trained_model_name` when multiple model runs are loaded.
-    """)
+    mo.md(
+        r"""
+        ## §2 Ensemble Member Metrics
+        RMSE, Pearson R, and Kendall τ for every ensemble member and the ensemble average,
+        grouped by `trained_model_name` when multiple model runs are loaded.
+        """
+    )
     return
 
 
@@ -242,23 +256,28 @@ def _(metrics_df):
     return
 
 
+# ---------------------------------------------------------------------------
+# §3  Predicted vs True
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""
-    ## §3 Predicted vs True
-    Colour shows epistemic std (ensemble disagreement).
-    """)
+    mo.md(
+        r"""
+        ## §3 Predicted vs True
+        Colour shows epistemic std (ensemble disagreement).
+        """
+    )
     return
 
 
 @app.cell
-def _(PRED_COL, TRUTH_COL, UID_COL, df, px):
+def _(PRED_COL, TRUTH_COL, UID_COL, df, go, px):
     def _plot_pred_vs_true(
         _df,
         truth_col,
         pred_col,
         uid_col,
-        std_col="epistemic_std",
+        std_col="predictive_std",
         facet_col="model_name",
         title=None,
         subtitle=None,
@@ -302,16 +321,17 @@ def _(PRED_COL, TRUTH_COL, UID_COL, df, px):
     _plot_pred_vs_true(
         df, TRUTH_COL, PRED_COL, UID_COL,
         title="Model Calibration Comparison",
-        subtitle="Colour indicates epistemic uncertainty",
+        subtitle="Colour indicates predictive uncertainty",
     )
     return
 
 
+# ---------------------------------------------------------------------------
+# §4  Residual Analysis
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("""
-    ## §4 Residual Analysis
-    """)
+    mo.md("## §4 Residual Analysis")
     return
 
 
@@ -343,22 +363,31 @@ def _(TRUTH_COL, UID_COL, df, go, make_subplots):
     return
 
 
+# ---------------------------------------------------------------------------
+# §5  Uncertainty Calibration
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""
-    ## §5 Uncertainty Calibration
+    mo.md(
+        r"""
+        ## §5 Uncertainty Calibration
 
-    **Epistemic std** = std dev of the N ensemble checkpoint predictions (`std(preds_0…N)`).
-    Valid for all model types.
+        **`predictive_std`** — the uncertainty estimate used throughout this section:
 
-    **Aleatoric std** *(Bayesian models only)* = `sqrt(mean(var_0…N))`, where each `var_i`
-    is the variance from the model's `logvar_head`.
+        | Model type | `predictive_std` |
+        |---|---|
+        | Non-Bayesian ensemble | `epistemic_std` = std dev across ensemble checkpoints |
+        | Bayesian ensemble | `sqrt(aleatoric_std² + epistemic_std²)` — total predictive uncertainty |
 
-    Diagnostics shown:
-    1. **Reliability diagram** — mean |error| per uncertainty bin; good calibration is monotone
-    2. **Sparsification curve** — RMSE as uncertain predictions are included
-    3. **Prediction interval coverage** — fraction of true values within ±kσ vs Gaussian ideal
-    """)
+        where `aleatoric_std = sqrt(mean(var_0…N))` is the model's self-reported noise
+        (softplus-activated `logvar_head`, denormalised to pK units).
+
+        Diagnostics shown:
+        1. **Reliability diagram** — mean |error| per `predictive_std` bin; good calibration is monotone
+        2. **Sparsification curve** — RMSE as uncertain predictions are included
+        3. **Prediction interval coverage** — fraction of true values within ±kσ vs Gaussian ideal
+        """
+    )
     return
 
 
@@ -375,7 +404,7 @@ def _(df, pl):
 
 
 @app.cell
-def _(df_typed, go, np, pl, px):
+def _(np, erf, go, df_typed, pl, px):
     def _reliability_diagram(unc, abs_err, n_bins=10):
         bin_edges = np.percentile(unc, np.linspace(0, 100, n_bins + 1))
         bin_idx   = np.searchsorted(bin_edges[1:-1], unc)
@@ -392,10 +421,10 @@ def _(df_typed, go, np, pl, px):
     for _model_type in _model_types:
         _sub = (
             df_typed.filter(pl.col("model_type") == _model_type)
-            .select(["epistemic_std", "residual"])
+            .select(["predictive_std", "residual"])
             .drop_nulls()
         )
-        _unc = _sub["epistemic_std"].to_numpy()
+        _unc = _sub["predictive_std"].to_numpy()
         _abs_err = np.abs(_sub["residual"].to_numpy())
         _mu_unc, _mu_err = _reliability_diagram(_unc, _abs_err)
         _color = _color_map[_model_type]
@@ -420,7 +449,7 @@ def _(df_typed, go, np, pl, px):
 
 
 @app.cell
-def _(df_typed, go, np, pl):
+def _(np, df_typed, go, pl):
     def _sparsification_curve(unc, residuals):
         order = np.argsort(unc)
         sq_err_sorted = residuals[order] ** 2
@@ -432,11 +461,11 @@ def _(df_typed, go, np, pl):
     for _model_type in df_typed["model_type"].unique().to_list():
         _sub = (
             df_typed.filter(pl.col("model_type") == _model_type)
-            .select(["epistemic_std", "residual"])
+            .select(["predictive_std", "residual"])
             .drop_nulls()
         )
         _frac, _cum_rmse = _sparsification_curve(
-            _sub["epistemic_std"].to_numpy(), _sub["residual"].to_numpy()
+            _sub["predictive_std"].to_numpy(), _sub["residual"].to_numpy()
         )
         _fig.add_trace(go.Scatter(x=_frac, y=_cum_rmse, mode="lines", name=_model_type))
     _fig.update_layout(
@@ -450,7 +479,7 @@ def _(df_typed, go, np, pl):
 
 
 @app.cell
-def _(df_typed, erf, go, np, pl):
+def _(erf, np, df_typed, go, pl):
     def _interval_coverage(unc, residuals):
         k_vals = np.array([0.5, 1.0, 1.5, 2.0])
         obs_cov = (
@@ -465,11 +494,11 @@ def _(df_typed, erf, go, np, pl):
     for _model_type in df_typed["model_type"].unique().to_list():
         _sub = (
             df_typed.filter(pl.col("model_type") == _model_type)
-            .select(["epistemic_std", "residual"])
+            .select(["predictive_std", "residual"])
             .drop_nulls()
         )
         _k_vals, _obs_cov, _expected_cov = _interval_coverage(
-            _sub["epistemic_std"].to_numpy(), _sub["residual"].to_numpy()
+            _sub["predictive_std"].to_numpy(), _sub["residual"].to_numpy()
         )
         _k_vals_ref = _k_vals
         _expected_ref = _expected_cov
@@ -491,7 +520,7 @@ def _(df_typed, erf, go, np, pl):
 
 
 @app.cell
-def _(df, np, pl, uct):
+def _(df, go, np, pl, uct):
     def _risk_coverage_auc(unc, residuals):
         order = np.argsort(unc)
         res_sorted = residuals[order]
@@ -507,11 +536,11 @@ def _(df, np, pl, uct):
         _dm = df.filter(pl.col("model_name") == _model_name).drop_nulls()
         _preds_arr = _dm["preds"].to_numpy()
         _targets_arr = _dm["pK"].to_numpy()
-        _unc_arr = _dm["epistemic_std"].to_numpy()
+        _unc_arr = _dm["predictive_std"].to_numpy()
         _res_arr = _dm["residual"].to_numpy()
         _pearson_r = (
             _dm.with_columns(pl.col("residual").abs().alias("abs_res"))
-            .select(pl.corr("epistemic_std", "abs_res"))
+            .select(pl.corr("predictive_std", "abs_res"))
             .item()
         )
         _uct_m = uct.metrics.get_all_metrics(y_pred=_preds_arr, y_std=_unc_arr, y_true=_targets_arr)
@@ -559,7 +588,7 @@ def _(df, go, np, pl):
         _d2 = df.filter(pl.col("model_name") == _m2).drop_nulls()
         _p2 = _d2["preds"].to_numpy()
         _y2 = _d2["pK"].to_numpy()
-        _u2 = _d2["epistemic_std"].to_numpy()
+        _u2 = _d2["predictive_std"].to_numpy()
         _order2 = np.argsort(_u2)
         _y_s2, _p_s2, _u_s2 = _y2[_order2], _p2[_order2], _u2[_order2]
         _inside2 = (_y_s2 >= (_p_s2 - 2 * _u_s2)) & (_y_s2 <= (_p_s2 + 2 * _u_s2))
@@ -582,7 +611,7 @@ def _(df, go, np, pl):
     _fig_rc = go.Figure()
     for _m3 in _model_names3:
         _d3 = df.filter(pl.col("model_name") == _m3).drop_nulls()
-        _u3 = _d3["epistemic_std"].to_numpy()
+        _u3 = _d3["predictive_std"].to_numpy()
         _r3 = _d3["residual"].to_numpy()
         _o3 = np.argsort(_u3)
         _r3s = _r3[_o3]
@@ -598,12 +627,17 @@ def _(df, go, np, pl):
     return
 
 
+# ---------------------------------------------------------------------------
+# §6  Per-Target Kendall τ
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""
-    ## §6 Per-Target Kendall τ (Ranking Ability)
-    Each `unique_id` is treated as its own target.
-    """)
+    mo.md(
+        r"""
+        ## §6 Per-Target Kendall τ (Ranking Ability)
+        Each `unique_id` is treated as its own target.
+        """
+    )
     return
 
 
@@ -640,24 +674,17 @@ def _(MIN_TARGET_SAMPLES, PRED_COL, TRUTH_COL, UID_COL, df, results):
     return
 
 
+# ---------------------------------------------------------------------------
+# §7  Outlier Table
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("""
-    ## §7 Outlier Table
-    """)
+    mo.md("## §7 Outlier Table")
     return
 
 
 @app.cell
-def _(
-    PRED_COL,
-    TOP_N_OUTLIERS,
-    TRUTH_COL,
-    UID_COL,
-    df,
-    is_bayesian_output,
-    pl,
-):
+def _(PRED_COL, TOP_N_OUTLIERS, TRUTH_COL, UID_COL, df, is_bayesian_output, pl):
     _outlier_cols = (
         [UID_COL, TRUTH_COL, PRED_COL, "residual", "epistemic_std"]
         + (["aleatoric_std"] if is_bayesian_output else [])
@@ -673,11 +700,12 @@ def _(
     return
 
 
+# ---------------------------------------------------------------------------
+# §8  Success Rate
+# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md("""
-    ## §8 Success Rate
-    """)
+    mo.md("## §8 Success Rate")
     return
 
 
