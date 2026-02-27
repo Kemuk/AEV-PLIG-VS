@@ -82,39 +82,16 @@ def _(DATA_NAME, PRED_COL, TRUTH_COL, TRAINED_MODEL_NAMES, np, pl, re, results):
     )
     n_models = len(pred_member_cols)
 
-    # Detect Bayesian output (var_0 ... var_N present)
-    var_member_cols = sorted(
-        [c for c in df.columns if re.fullmatch(r"var_\d+", c)],
-        key=lambda c: int(c.split("_")[1]),
-    )
-    is_bayesian_output = bool(var_member_cols)
+    print(f"Rows: {df.height:,} | ensemble members: {n_models}")
 
-    print(
-        f"Rows: {df.height:,} | ensemble members: {n_models} "
-        f"| Bayesian output: {is_bayesian_output}"
-    )
-
-    # Epistemic std = std dev across ensemble checkpoints
+    # Ensemble std = std dev of predictions across checkpoints
     df = df.with_columns(
         (
             pl.concat_list([pl.col(c) for c in pred_member_cols]).list.std()
             if n_models > 1
             else pl.lit(0.0)
-        ).alias("epistemic_std")
+        ).alias("ensemble_std")
     )
-
-    # uncertainty_std: each model's own dedicated uncertainty estimate.
-    # VBLL (GATv2NetBayesian):  sqrt(var) from predictive.variance
-    # Base / MixedPrecision:    epistemic_std (ensemble disagreement)
-    if "var" in df.columns:
-        _unc_expr = (
-            pl.when(pl.col("var").is_not_null())
-            .then(pl.col("var").sqrt())
-            .otherwise(pl.col("epistemic_std"))
-        )
-    else:
-        _unc_expr = pl.col("epistemic_std")
-    df = df.with_columns(_unc_expr.alias("uncertainty_std"))
 
     # Residual (signed: predicted − true)
     if TRUTH_COL in df.columns:
@@ -261,7 +238,7 @@ def _(mo):
     mo.md(
         r"""
         ## §3 Predicted vs True
-        Colour shows uncertainty_std.
+        Colour shows ensemble std (std dev across ensemble checkpoints).
 """
     )
     return
@@ -274,7 +251,7 @@ def _(PRED_COL, TRUTH_COL, UID_COL, df, go, px):
         truth_col,
         pred_col,
         uid_col,
-        std_col="uncertainty_std",
+        std_col="ensemble_std",
         facet_col="model_name",
         title=None,
         subtitle=None,
@@ -310,7 +287,7 @@ def _(PRED_COL, TRUTH_COL, UID_COL, df, go, px):
         _fig.update_xaxes(range=[_x_min, _x_max], scaleanchor="y")
         _fig.update_yaxes(range=[_x_min, _x_max])
         _fig.update_layout(
-            coloraxis_colorbar=dict(title="Uncertainty Std Dev"),
+            coloraxis_colorbar=dict(title="Ensemble Std Dev"),
             margin=dict(l=40, r=40, t=80, b=40),
         )
         return _fig
@@ -318,7 +295,7 @@ def _(PRED_COL, TRUTH_COL, UID_COL, df, go, px):
     _plot_pred_vs_true(
         df, TRUTH_COL, PRED_COL, UID_COL,
         title="Model Calibration Comparison",
-        subtitle="Colour indicates uncertainty_std",
+        subtitle="Colour indicates ensemble std",
     )
     return
 
@@ -369,17 +346,11 @@ def _(mo):
         r"""
         ## §5 Uncertainty Calibration
 
-        **`uncertainty_std`** — each model's dedicated uncertainty estimate.
-        Used as the uncertainty axis for all calibration diagnostics below.
-
-        | Model | `uncertainty_std` |
-        |---|---|
-        | `GATv2Net`, `MixedPrecision` | `epistemic_std` — ensemble std dev |
-        | `GATv2NetBayesian` | `sqrt(var)` — VBLL predictive variance |
-        | `GATv2NetAleatoric` | `sqrt(aleatoric_var)` — logvar head *(coming soon)* |
+        **`ensemble_std`** — std dev of predictions across ensemble checkpoints.
+        Uniform for all model types. Used as the uncertainty estimate in all calibration plots.
 
         Diagnostics shown:
-        1. **Reliability diagram** — mean |error| per `uncertainty_std` bin; good calibration is monotone
+        1. **Reliability diagram** — mean |error| per `ensemble_std` bin; good calibration is monotone
         2. **Sparsification curve** — RMSE as uncertain predictions are included
         3. **Prediction interval coverage** — fraction of true values within ±kσ vs Gaussian ideal
         """
@@ -412,10 +383,10 @@ def _(np, erf, go, df_typed, pl, px):
     for _mn in _model_names:
         _sub = (
             df_typed.filter(pl.col("model_name") == _mn)
-            .select(["uncertainty_std", "residual"])
+            .select(["ensemble_std", "residual"])
             .drop_nulls()
         )
-        _unc = _sub["uncertainty_std"].to_numpy()
+        _unc = _sub["ensemble_std"].to_numpy()
         _abs_err = np.abs(_sub["residual"].to_numpy())
         _mu_unc, _mu_err = _reliability_diagram(_unc, _abs_err)
         _color = _color_map[_mn]
@@ -431,7 +402,7 @@ def _(np, erf, go, df_typed, pl, px):
         ))
     _fig.update_layout(
         title="Reliability Diagram",
-        xaxis_title="Mean uncertainty_std",
+        xaxis_title="Mean ensemble std",
         yaxis_title="Mean |Residual|",
         width=800, height=600,
     )
@@ -452,11 +423,11 @@ def _(np, df_typed, go, pl):
     for _mn2 in [m for m in df_typed["model_name"].unique().to_list() if m is not None]:
         _sub = (
             df_typed.filter(pl.col("model_name") == _mn2)
-            .select(["uncertainty_std", "residual"])
+            .select(["ensemble_std", "residual"])
             .drop_nulls()
         )
         _frac, _cum_rmse = _sparsification_curve(
-            _sub["uncertainty_std"].to_numpy(), _sub["residual"].to_numpy()
+            _sub["ensemble_std"].to_numpy(), _sub["residual"].to_numpy()
         )
         _fig.add_trace(go.Scatter(x=_frac, y=_cum_rmse, mode="lines", name=_mn2))
     _fig.update_layout(
@@ -485,11 +456,11 @@ def _(erf, np, df_typed, go, pl):
     for _mn3 in [m for m in df_typed["model_name"].unique().to_list() if m is not None]:
         _sub = (
             df_typed.filter(pl.col("model_name") == _mn3)
-            .select(["uncertainty_std", "residual"])
+            .select(["ensemble_std", "residual"])
             .drop_nulls()
         )
         _k_vals, _obs_cov, _expected_cov = _interval_coverage(
-            _sub["uncertainty_std"].to_numpy(), _sub["residual"].to_numpy()
+            _sub["ensemble_std"].to_numpy(), _sub["residual"].to_numpy()
         )
         _k_vals_ref = _k_vals
         _expected_ref = _expected_cov
@@ -527,11 +498,11 @@ def _(df, go, np, pl, uct):
         _dm = df.filter(pl.col("model_name") == _model_name).drop_nulls()
         _preds_arr = _dm["preds"].to_numpy()
         _targets_arr = _dm["pK"].to_numpy()
-        _unc_arr = _dm["uncertainty_std"].to_numpy()
+        _unc_arr = _dm["ensemble_std"].to_numpy()
         _res_arr = _dm["residual"].to_numpy()
         _pearson_r = (
             _dm.with_columns(pl.col("residual").abs().alias("abs_res"))
-            .select(pl.corr("uncertainty_std", "abs_res"))
+            .select(pl.corr("ensemble_std", "abs_res"))
             .item()
         )
         _uct_m = uct.metrics.get_all_metrics(y_pred=_preds_arr, y_std=_unc_arr, y_true=_targets_arr)
@@ -579,7 +550,7 @@ def _(df, go, np, pl):
         _d2 = df.filter(pl.col("model_name") == _m2).drop_nulls()
         _p2 = _d2["preds"].to_numpy()
         _y2 = _d2["pK"].to_numpy()
-        _u2 = _d2["uncertainty_std"].to_numpy()
+        _u2 = _d2["ensemble_std"].to_numpy()
         _order2 = np.argsort(_u2)
         _y_s2, _p_s2, _u_s2 = _y2[_order2], _p2[_order2], _u2[_order2]
         _inside2 = (_y_s2 >= (_p_s2 - 2 * _u_s2)) & (_y_s2 <= (_p_s2 + 2 * _u_s2))
@@ -602,7 +573,7 @@ def _(df, go, np, pl):
     _fig_rc = go.Figure()
     for _m3 in _model_names3:
         _d3 = df.filter(pl.col("model_name") == _m3).drop_nulls()
-        _u3 = _d3["uncertainty_std"].to_numpy()
+        _u3 = _d3["ensemble_std"].to_numpy()
         _r3 = _d3["residual"].to_numpy()
         _o3 = np.argsort(_u3)
         _r3s = _r3[_o3]
@@ -677,7 +648,7 @@ def _(mo):
 @app.cell
 def _(PRED_COL, TOP_N_OUTLIERS, TRUTH_COL, UID_COL, df, pl):
     _outlier_cols = (
-        [UID_COL, TRUTH_COL, PRED_COL, "residual", "epistemic_std", "uncertainty_std"]
+        [UID_COL, TRUTH_COL, PRED_COL, "residual", "ensemble_std"]
         + (["trained_model_name"] if "trained_model_name" in df.columns else [])
     )
     (
