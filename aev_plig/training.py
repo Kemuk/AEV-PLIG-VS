@@ -415,3 +415,116 @@ class Trainer:
             return y_true, y_pred, y_var
 
         return y_true, y_pred
+
+
+# ==================== High-level training pipeline ====================
+
+def train_model(
+    hp_config,
+    *,
+    dataset: str,
+    device,
+    num_workers: int = 0,
+    epochs: int = Config.NUM_EPOCHS,
+    batch_size: int = Config.BATCH_SIZE,
+    model_type: str = Config.MODEL_NAME,
+    run_name: str,
+    wandb_run=None,
+):
+    """Train one model and log val metrics.  Returns the trained model directory.
+
+    hp_config supports attribute access and provides: hidden_dim, num_layers,
+    head, lr, weight_decay, activation_function, seed.  Missing attributes fall
+    back to Config defaults, so both argparse.Namespace and wandb.config work
+    without an adapter.
+    """
+    import json
+    import pickle
+    import random
+    from pathlib import Path
+    from aev_plig.datasets import init_weights, load_split
+    from aev_plig.models import get_model
+
+    seed = getattr(hp_config, 'seed', 42)
+    if seed is None:
+        seed = 42
+    random.seed(seed)
+    torch.manual_seed(int(seed))
+
+    train_data = load_split(dataset, 'train')
+    valid_data = load_split(dataset, 'valid')
+
+    scaler_path = Path('data/processed') / dataset / 'scaler.pickle'
+    legacy_scaler = Path('data/processed') / f'{dataset}_scaler.pickle'
+    with open(scaler_path if scaler_path.exists() else legacy_scaler, 'rb') as f:
+        y_scaler = pickle.load(f)
+
+    num_node_features = train_data[0].x.shape[1]
+    num_edge_features = train_data[0].edge_attr.shape[1]
+
+    # Thin proxy so Bayesian models can read dataset_size from config
+    # without mutating hp_config (wandb.config is read-only).
+    class _ModelConfig:
+        def __init__(self, base, dataset_size):
+            self._base = base
+            self.dataset_size = dataset_size
+
+        def __getattr__(self, name):
+            return getattr(self._base, name)
+
+    model_config = _ModelConfig(hp_config, dataset_size=len(train_data))
+
+    model = get_model(
+        model_type,
+        node_feature_dim=num_node_features,
+        edge_feature_dim=num_edge_features,
+        config=model_config,
+    )
+    model.apply(init_weights)
+    model.to(device)
+
+    output_dir = Path('output') / 'trained_models' / run_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    config_dict = {
+        'model':               model_type,
+        'hidden_dim':          getattr(hp_config, 'hidden_dim',          Config.HIDDEN_DIM),
+        'head':                getattr(hp_config, 'head',                 Config.NUM_ATTENTION_HEADS),
+        'activation_function': getattr(hp_config, 'activation_function', Config.ACTIVATION_FUNCTION),
+        'num_layers':          getattr(hp_config, 'num_layers',           Config.NUM_GNN_LAYERS),
+        'lr':                  getattr(hp_config, 'lr',                   Config.LEARNING_RATE),
+        'weight_decay':        getattr(hp_config, 'weight_decay',         Config.WEIGHT_DECAY),
+        'seed':                seed,
+        'dataset':             dataset,
+        'epochs':              epochs,
+        'dataset_size':        len(train_data),
+        'node_feature_dim':    num_node_features,
+        'edge_feature_dim':    num_edge_features,
+        'run_name':            run_name,
+    }
+    with open(output_dir / 'config.json', 'w') as f:
+        json.dump(config_dict, f, indent=2)
+
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers)
+    valid_loader = DataLoader(valid_data, batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers)
+
+    trainer = Trainer(
+        model=model,
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+        device=device,
+        y_scaler=y_scaler,
+        learning_rate=getattr(hp_config, 'lr',           Config.LEARNING_RATE),
+        weight_decay=getattr(hp_config,  'weight_decay', Config.WEIGHT_DECAY),
+    )
+
+    model_save_path = output_dir / f'model_seed_{seed}.model'
+    trainer.fit(n_epochs=epochs, model_save_path=str(model_save_path))
+    print(f'Saved: {model_save_path}')
+
+    if wandb_run is not None:
+        wandb_run.summary['val_pearson_r'] = trainer.best_pc
+
+    return output_dir
