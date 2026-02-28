@@ -579,6 +579,7 @@ def run_predictions(test_data, df, config):
         with open(config_path) as f:
             model_cfg = json.load(f)
         model_class = MODEL_REGISTRY[model_cfg["model"]]
+        config.model_name = model_cfg.get("model", Config.MODEL_NAME)
         pred_config = type('Namespace', (), {**model_cfg, "device": config.device})()
     else:
         # Backward compat: use CLI-provided arch flags
@@ -608,8 +609,10 @@ def save_results(df, config, total_time, graph_time=None):
     print("STEP: SAVE RESULTS")
     print("="*60 + "\n")
 
+    model_name = getattr(config, "model_name", Config.MODEL_NAME)
     output_file = (
         f"{Config.PREDICTIONS_DIR}/"
+        f"{model_name}/"
         f"{config.trained_model_name}/{config.data_name}_predictions.parquet"
     )
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
