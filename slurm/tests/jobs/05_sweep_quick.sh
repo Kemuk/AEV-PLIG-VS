@@ -13,7 +13,12 @@
 # Jobs may timeout — this is expected on the devel partition.
 #
 # Usage:
-#   ./slurm/tests/jobs/05_sweep_quick.sh
+#   ./slurm/tests/jobs/05_sweep_quick.sh [SWEEP_YAML]
+#
+# Examples:
+#   ./slurm/tests/jobs/05_sweep_quick.sh                                      # default GATv2Net
+#   ./slurm/tests/jobs/05_sweep_quick.sh sweeps/ablation_preserver_quick.yaml  # preserver
+#   ./slurm/tests/jobs/05_sweep_quick.sh sweeps/ablation_occam_quick.yaml      # occam
 # =============================================================================
 set -euo pipefail
 
@@ -30,6 +35,7 @@ MEM="${MEM_STANDARD}"
 CPUS="${CPUS_STANDARD}"
 GPUS=1
 WANDB_PROJECT="aev-plig-dev"
+SWEEP_YAML="${1:-sweeps/gatv2net_sweep_quick.yaml}"
 
 mkdir -p "$PROJECT_ROOT/slurm/logs"
 
@@ -37,15 +43,15 @@ echo "========================================"
 echo "QUICK TEST: W&B Sweep Agent"
 echo "========================================"
 echo "Agents:     ${NUM_AGENTS} (TEST)"
-echo "Epochs:     2 (TEST — set in sweep_quick.yaml)"
+echo "Sweep YAML: ${SWEEP_YAML}"
 echo "Partition:  ${PARTITION} (10 min max)"
 echo "W&B:        ${WANDB_PROJECT}"
 echo "========================================"
 echo ""
 
 # Create a fresh test sweep (self-contained — no pre-existing sweep required)
-echo "Creating test sweep from sweeps/gatv2net_sweep_quick.yaml ..."
-SWEEP_OUTPUT=$(cd "$PROJECT_ROOT" && wandb sweep sweeps/gatv2net_sweep_quick.yaml \
+echo "Creating test sweep from ${SWEEP_YAML} ..."
+SWEEP_OUTPUT=$(cd "$PROJECT_ROOT" && wandb sweep "${SWEEP_YAML}" \
     --project "${WANDB_PROJECT}" --name "quick_test_$(date +%Y%m%d_%H%M%S)" 2>&1)
 echo "$SWEEP_OUTPUT"
 
