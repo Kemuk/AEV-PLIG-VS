@@ -7,7 +7,7 @@
 #   → prints SWEEP_ID
 # Then submit SLURM array: ./slurm/jobs/05_sweep.sh <SWEEP_ID>
 #
-# Edit --base_model_dir below to point at the pre-trained ensemble directory
+# Edit base_model_dir below to point at the pre-trained ensemble directory
 # before registering the sweep.
 
 program: scripts/sweep_agent.py
@@ -20,6 +20,12 @@ metric:
 run_cap: 10
 
 parameters:
+  archetype:
+    value: occam
+  base_model_dir:
+    value: "output/trained_models/PLACEHOLDER"  # edit before running
+  max_training_hours:
+    value: 3
   freeze_gnn:
     value: false
   lr_body:
@@ -47,9 +53,3 @@ command:
   - auto
   - --epochs
   - "2000"
-  - --max_training_hours
-  - "3"
-  - --archetype
-  - occam
-  - --base_model_dir
-  - output/trained_models/PLACEHOLDER  # edit before running
