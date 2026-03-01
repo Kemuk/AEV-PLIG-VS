@@ -49,28 +49,11 @@ SWEEP_OUTPUT=$(cd "$PROJECT_ROOT" && wandb sweep sweeps/gatv2net_sweep_quick.yam
     --project "${WANDB_PROJECT}" --name "quick_test_$(date +%Y%m%d_%H%M%S)" 2>&1)
 echo "$SWEEP_OUTPUT"
 
-# Extract sweep ID from wandb output (format: "sweep ID: abc123" or "abc/proj/abc123")
-SWEEP_ID=$(echo "$SWEEP_OUTPUT" | grep -oP '(?<=sweep ID: )[^\s]+' | tail -1)
-if [[ -z "$SWEEP_ID" ]]; then
-    # Fallback: last path component of the sweep URL
-    SWEEP_ID=$(echo "$SWEEP_OUTPUT" | grep -oP '[a-z0-9]{8,}' | tail -1)
-fi
-
-if [[ -z "$SWEEP_ID" ]]; then
-    echo "ERROR: Could not extract sweep ID from wandb output. Check W&B login."
-    exit 1
-fi
-
-ENTITY="${WANDB_ENTITY:-}"
-if [[ -n "$ENTITY" ]]; then
-    AGENT_TARGET="${ENTITY}/${WANDB_PROJECT}/${SWEEP_ID}"
-else
-    AGENT_TARGET="${WANDB_PROJECT}/${SWEEP_ID}"
-fi
+AGENT_TARGET=$(echo "$SWEEP_OUTPUT" | grep -oP '(?<=wandb agent )[^\s]+' | tail -1)
+[[ -z "$AGENT_TARGET" ]] && { echo "ERROR: Could not extract agent target. Check W&B login."; exit 1; }
 
 echo ""
-echo "Sweep ID:   ${SWEEP_ID}"
-echo "Target:     ${AGENT_TARGET}"
+echo "Agent target: ${AGENT_TARGET}"
 echo ""
 
 JOB_ID=$(sbatch --parsable --array=1-${NUM_AGENTS} <<EOF
