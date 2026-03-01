@@ -5,6 +5,7 @@ This module provides the Trainer class and related functions for training
 binding affinity prediction models.
 """
 
+import time
 import torch
 import torch.nn as nn
 import numpy as np
@@ -158,7 +159,7 @@ class Trainer:
 
     def __init__(self, model, train_loader, valid_loader, device, y_scaler,
                  optimizer=None, loss_fn=None, learning_rate=None, weight_decay=None,
-                 use_amp=None):
+                 use_amp=None, lr_body=None, lr_head=None, freeze_gnn=False):
         self.model = model
         self.train_loader = train_loader
         self.valid_loader = valid_loader
@@ -182,11 +183,29 @@ class Trainer:
                     {"params": other_params, "weight_decay": weight_decay},
                     {"params": vbll_params,  "weight_decay": 0.0},
                 ], lr=learning_rate)
+            elif freeze_gnn:
+                for m in list(model.GNN_layers) + list(model.BN_layers):
+                    for p in m.parameters():
+                        p.requires_grad_(False)
+                self.optimizer = torch.optim.Adam(
+                    filter(lambda p: p.requires_grad, model.parameters()),
+                    lr=lr_head or learning_rate,
+                    weight_decay=weight_decay,
+                )
+            elif lr_body is not None or lr_head is not None:
+                gnn_ids = {id(p) for m in list(model.GNN_layers) + list(model.BN_layers)
+                           for p in m.parameters()}
+                self.optimizer = torch.optim.Adam([
+                    {"params": [p for p in model.parameters() if id(p) in gnn_ids],
+                     "lr": lr_body or learning_rate},
+                    {"params": [p for p in model.parameters() if id(p) not in gnn_ids],
+                     "lr": lr_head or learning_rate},
+                ], weight_decay=weight_decay)
             else:
                 self.optimizer = torch.optim.Adam(
                     model.parameters(),
                     lr=learning_rate,
-                    weight_decay=weight_decay
+                    weight_decay=weight_decay,
                 )
         else:
             self.optimizer = optimizer
@@ -304,7 +323,7 @@ class Trainer:
 
         return y_true, y_pred
 
-    def fit(self, n_epochs, model_save_path, early_stopping_window=None):
+    def fit(self, n_epochs, model_save_path, early_stopping_window=None, max_training_hours=None):
         """
         Train the model for multiple epochs with early stopping.
 
@@ -328,7 +347,11 @@ class Trainer:
             'val_rmse': []
         }
 
+        _t0 = time.time()
         for epoch in range(n_epochs):
+            if max_training_hours and (time.time() - _t0) / 3600 >= max_training_hours:
+                print(f'Wall-clock limit {max_training_hours}h reached, stopping.')
+                break
             # Train
             train_loss = self.train_epoch(epoch + 1)
             history['train_loss'].append(train_loss)
@@ -433,6 +456,9 @@ def train_model(
     model_type: str = Config.MODEL_NAME,
     run_name: str,
     wandb_run=None,
+    base_model_dir: str | None = None,
+    max_training_hours: float | None = None,
+    archetype: str | None = None,
 ):
     """Train one model and log val metrics.  Returns the trained model directory.
 
@@ -476,13 +502,25 @@ def train_model(
 
     model_config = _ModelConfig(hp_config, dataset_size=len(train_data))
 
+    freeze_gnn = getattr(hp_config, 'freeze_gnn', False)
+    lr_body    = getattr(hp_config, 'lr_body',    None)
+    lr_head    = getattr(hp_config, 'lr_head',    None)
+
     model = get_model(
         model_type,
         node_feature_dim=num_node_features,
         edge_feature_dim=num_edge_features,
         config=model_config,
     )
-    model.apply(init_weights)
+    if base_model_dir:
+        ckpts = sorted(Path(base_model_dir).glob('model_seed_*.model'))
+        if not ckpts:
+            raise FileNotFoundError(f'No model_seed_*.model files found in {base_model_dir}')
+        ckpt = ckpts[int(seed) % len(ckpts)]
+        model.load_state_dict(torch.load(ckpt, map_location=device))
+        print(f'Loaded base checkpoint: {ckpt}')
+    else:
+        model.apply(init_weights)
     model.to(device)
 
     output_dir = _PROJECT_ROOT / 'output' / 'trained_models' / run_name
@@ -503,6 +541,13 @@ def train_model(
         'node_feature_dim':    num_node_features,
         'edge_feature_dim':    num_edge_features,
         'run_name':            run_name,
+        'freeze_gnn':          freeze_gnn,
+        'lr_body':             lr_body,
+        'lr_head':             lr_head,
+        'dropout':             getattr(hp_config, 'dropout', 0.0),
+        'archetype':           archetype,
+        'base_model_dir':      str(base_model_dir) if base_model_dir else None,
+        'max_training_hours':  max_training_hours,
     }
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(config_dict, f, indent=2)
@@ -520,10 +565,14 @@ def train_model(
         y_scaler=y_scaler,
         learning_rate=getattr(hp_config, 'lr',           Config.LEARNING_RATE),
         weight_decay=getattr(hp_config,  'weight_decay', Config.WEIGHT_DECAY),
+        lr_body=lr_body,
+        lr_head=lr_head,
+        freeze_gnn=freeze_gnn,
     )
 
     model_save_path = output_dir / f'model_seed_{seed}.model'
-    trainer.fit(n_epochs=epochs, model_save_path=str(model_save_path))
+    trainer.fit(n_epochs=epochs, model_save_path=str(model_save_path),
+                max_training_hours=max_training_hours)
     print(f'Saved: {model_save_path}')
 
     if wandb_run is not None:

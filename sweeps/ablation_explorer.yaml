@@ -1,0 +1,53 @@
+# Archetype sweep: Explorer
+#
+# Full fine-tuning with separate learning rates for GNN body and MLP head.
+# Explores the body/head learning rate trade-off.
+#
+# Pre-requisite: wandb sweep sweeps/ablation_explorer.yaml --project aev-plig-vs
+#   → prints SWEEP_ID
+# Then submit SLURM array: ./slurm/jobs/05_sweep.sh <SWEEP_ID>
+#
+# Edit --base_model_dir below to point at the pre-trained ensemble directory
+# before registering the sweep.
+
+program: scripts/sweep_agent.py
+
+method: bayes
+metric:
+  name: val_pearson_r
+  goal: maximize
+
+run_cap: 10
+
+parameters:
+  freeze_gnn:
+    value: false
+  lr_body:
+    distribution: log_uniform_values
+    min: 1.0e-06
+    max: 1.0e-04
+  lr_head:
+    distribution: log_uniform_values
+    min: 1.0e-05
+    max: 1.0e-03
+  seed:
+    distribution: int_uniform
+    min: 0
+    max: 9999
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - --dataset
+  - pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark
+  - --device
+  - auto
+  - --epochs
+  - "2000"
+  - --max_training_hours
+  - "3"
+  - --archetype
+  - explorer
+  - --base_model_dir
+  - output/trained_models/PLACEHOLDER  # edit before running

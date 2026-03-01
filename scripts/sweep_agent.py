@@ -34,10 +34,16 @@ def parse_args():
     p.add_argument('--epochs',        type=int, default=Config.NUM_EPOCHS)
     p.add_argument('--batch_size',    type=int, default=Config.BATCH_SIZE)
     p.add_argument('--model',         type=str, default=Config.MODEL_NAME)
-    p.add_argument('--wandb_project', type=str, default='aev-plig-vs')
-    p.add_argument('--wandb_entity',  type=str, default=None)
-    p.add_argument('--no_wandb',      action='store_true',
+    p.add_argument('--wandb_project',      type=str,   default='aev-plig-vs')
+    p.add_argument('--wandb_entity',       type=str,   default=None)
+    p.add_argument('--no_wandb',           action='store_true',
                    help='Skip W&B; use CLI HP args below for local smoke-testing')
+    p.add_argument('--base_model_dir',     type=str,   default=None,
+                   help='Pre-trained ensemble dir; each run loads seed %% n_checkpoints')
+    p.add_argument('--max_training_hours', type=float, default=None,
+                   help='Wall-clock training budget in hours')
+    p.add_argument('--archetype',          type=str,   default=None,
+                   help='Sweep archetype label (preserver/explorer/occam); stored in config.json')
 
     # ── HP fallback args — only used when --no_wandb is set ───────────────────
     p.add_argument('--hidden_dim',          type=int,   default=Config.HIDDEN_DIM)
@@ -80,6 +86,9 @@ def main():
         model_type=args.model,
         run_name=run_name,
         wandb_run=wandb_run,
+        base_model_dir=args.base_model_dir,
+        max_training_hours=args.max_training_hours,
+        archetype=args.archetype,
     )
 
 

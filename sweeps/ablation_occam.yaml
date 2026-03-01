@@ -1,0 +1,55 @@
+# Archetype sweep: Occam
+#
+# Full fine-tuning with heavy regularization (weight decay + dropout).
+# Fixed low body LR; explores weight decay and dropout strength.
+#
+# Pre-requisite: wandb sweep sweeps/ablation_occam.yaml --project aev-plig-vs
+#   → prints SWEEP_ID
+# Then submit SLURM array: ./slurm/jobs/05_sweep.sh <SWEEP_ID>
+#
+# Edit --base_model_dir below to point at the pre-trained ensemble directory
+# before registering the sweep.
+
+program: scripts/sweep_agent.py
+
+method: bayes
+metric:
+  name: val_pearson_r
+  goal: maximize
+
+run_cap: 10
+
+parameters:
+  freeze_gnn:
+    value: false
+  lr_body:
+    value: 5.0e-06
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.01
+    max: 0.2
+  dropout:
+    distribution: uniform
+    min: 0.3
+    max: 0.6
+  seed:
+    distribution: int_uniform
+    min: 0
+    max: 9999
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - --dataset
+  - pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark
+  - --device
+  - auto
+  - --epochs
+  - "2000"
+  - --max_training_hours
+  - "3"
+  - --archetype
+  - occam
+  - --base_model_dir
+  - output/trained_models/PLACEHOLDER  # edit before running

@@ -91,6 +91,9 @@ class BaseGATv2Net(torch.nn.Module, ABC):
         self.fc3 = nn.Linear(mlp_dims[1], mlp_dims[2])
         self.bn_connect3 = nn.BatchNorm1d(mlp_dims[2])
 
+        dropout_rate = getattr(config, 'dropout', 0.0) if config is not None else 0.0
+        self.dropout = nn.Dropout(dropout_rate)
+
     def _gnn_forward(self, x, edge_index, edge_attr):
         """Run input through GNN layers with batch normalization."""
         for layer, bn in zip(self.GNN_layers, self.BN_layers):
@@ -101,15 +104,9 @@ class BaseGATv2Net(torch.nn.Module, ABC):
 
     def _mlp_forward(self, x):
         """Run input through fully connected layers with batch normalization."""
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.bn_connect1(x)
-        x = self.fc2(x)
-        x = self.activation(x)
-        x = self.bn_connect2(x)
-        x = self.fc3(x)
-        x = self.activation(x)
-        x = self.bn_connect3(x)
+        x = self.dropout(self.bn_connect1(self.activation(self.fc1(x))))
+        x = self.dropout(self.bn_connect2(self.activation(self.fc2(x))))
+        x = self.dropout(self.bn_connect3(self.activation(self.fc3(x))))
         return x
 
     @abstractmethod
