@@ -1,0 +1,47 @@
+# Bayesian HP sweep for GATv2Net ensemble members.
+#
+# Pre-requisite: wandb sweep sweeps/gatv2net_sweep.yaml --project aev-plig-vs
+#   → prints SWEEP_ID
+# Then submit SLURM array: ./slurm/jobs/05_sweep.sh <SWEEP_ID>
+#
+# The command section passes static runtime args to sweep_agent.py directly,
+# preventing W&B from injecting HP values as CLI flags (they arrive via
+# wandb.config instead, keeping sweep_agent.py's argparse clean).
+
+program: scripts/sweep_agent.py
+
+method: bayes
+metric:
+  name: val_pearson_r
+  goal: maximize
+
+parameters:
+  lr:
+    distribution: log_uniform_values
+    min: 0.000005
+    max: 0.001
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.01
+  hidden_dim:
+    values: [128, 256, 512]
+  head:
+    values: [2, 3, 4, 6]
+  num_layers:
+    values: [3, 4, 5, 6]
+  activation_function:
+    values: [relu, leaky_relu]
+  seed:
+    distribution: int_uniform
+    min: 0
+    max: 9999
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - --dataset
+  - pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark
+  - --device
+  - auto

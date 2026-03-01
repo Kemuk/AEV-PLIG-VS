@@ -36,8 +36,10 @@ def parse_args():
     p.add_argument('--dataset',    type=str,   default='pdbbind_U_bindingnet_ligsim90')
     p.add_argument('--batch_size', type=int,   default=Config.BATCH_SIZE)
     p.add_argument('--epochs',     type=int,   default=Config.NUM_EPOCHS)
-    p.add_argument('--lr',         type=float, default=Config.LEARNING_RATE)
-    p.add_argument('--seed',       type=int,   default=None,
+    p.add_argument('--lr',           type=float, default=Config.LEARNING_RATE)
+    p.add_argument('--weight_decay', type=float, default=Config.WEIGHT_DECAY)
+    p.add_argument('--num_layers',   type=int,   default=Config.NUM_GNN_LAYERS)
+    p.add_argument('--seed',         type=int,   default=None,
                    help='Train single model with this seed (for parallel jobs)')
     p.add_argument('--timestamp',  type=str,   default=None,
                    help='Shared timestamp for ensemble output dir (parallel jobs)')
@@ -88,9 +90,11 @@ def main():
         "activation_function": args.activation_function,
         "node_feature_dim":    num_node_features,
         "edge_feature_dim":    num_edge_features,
+        "num_layers":          args.num_layers,
         "dataset":             args.dataset,
         "epochs":              args.epochs,
         "lr":                  args.lr,
+        "weight_decay":        args.weight_decay,
         "batch_size":          args.batch_size,
         "timestamp":           timestamp,
         "dataset_size":        args.dataset_size,
@@ -137,6 +141,7 @@ def main():
         trainer = Trainer(
             model=model, train_loader=train_loader, valid_loader=valid_loader,
             device=device, y_scaler=y_scaler, learning_rate=args.lr,
+            weight_decay=args.weight_decay,
         )
 
         model_save_path = output_dir / f"model_seed_{seed}.model"

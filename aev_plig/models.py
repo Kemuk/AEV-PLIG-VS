@@ -62,7 +62,7 @@ class BaseGATv2Net(torch.nn.Module, ABC):
         else:
             head = Config.NUM_ATTENTION_HEADS
 
-        self.number_GNN_layers = Config.NUM_GNN_LAYERS
+        self.number_GNN_layers = getattr(config, 'num_layers', Config.NUM_GNN_LAYERS)
         self.activation = ACTIVATION_FUNCTIONS[self.act]
 
         # GNN layers
