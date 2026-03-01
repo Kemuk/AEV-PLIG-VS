@@ -36,7 +36,7 @@ command:
   - ${interpreter}
   - ${program}
   - --dataset
-  - pdbbind_U_bindingnet_ligsim90
+  - pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark
   - --device
   - auto
   - --epochs
