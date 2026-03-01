@@ -8,6 +8,7 @@ binding affinity prediction models.
 import torch
 import torch.nn as nn
 import numpy as np
+from pathlib import Path
 from torch.amp import autocast, GradScaler
 from torch_geometric.loader import DataLoader
 from aev_plig.config import Config
@@ -15,6 +16,8 @@ from aev_plig.models import GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecisi
 from math import sqrt
 from scipy import stats
 from aev_plig.prediction import denormalize, denormalize_variance
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 try:
     import wandb as _wandb
@@ -441,7 +444,6 @@ def train_model(
     import json
     import pickle
     import random
-    from pathlib import Path
     from aev_plig.datasets import init_weights, load_split
     from aev_plig.models import get_model
 
@@ -454,8 +456,8 @@ def train_model(
     train_data = load_split(dataset, 'train')
     valid_data = load_split(dataset, 'valid')
 
-    scaler_path = Path('data/processed') / dataset / 'scaler.pickle'
-    legacy_scaler = Path('data/processed') / f'{dataset}_scaler.pickle'
+    scaler_path = _PROJECT_ROOT / 'data' / 'processed' / dataset / 'scaler.pickle'
+    legacy_scaler = _PROJECT_ROOT / 'data' / 'processed' / f'{dataset}_scaler.pickle'
     with open(scaler_path if scaler_path.exists() else legacy_scaler, 'rb') as f:
         y_scaler = pickle.load(f)
 
@@ -483,7 +485,7 @@ def train_model(
     model.apply(init_weights)
     model.to(device)
 
-    output_dir = Path('output') / 'trained_models' / run_name
+    output_dir = _PROJECT_ROOT / 'output' / 'trained_models' / run_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     config_dict = {

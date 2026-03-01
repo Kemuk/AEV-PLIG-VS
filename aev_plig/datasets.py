@@ -15,6 +15,8 @@ from tqdm import tqdm
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 def init_weights(layer):
     """
@@ -100,7 +102,7 @@ def create_dataset(ids, targets, graphs_dict, scale=False, y_scaler=None,
 
 def load_split(dataset_name, split):
     """Load split data from chunked manifest format, with flat-file fallback."""
-    dataset_root = Path("data/processed") / dataset_name
+    dataset_root = _PROJECT_ROOT / "data" / "processed" / dataset_name
     split_dir = dataset_root / split
     manifest_path = split_dir / "manifest.json"
 
@@ -113,7 +115,7 @@ def load_split(dataset_name, split):
         ]
         return parts[0] if len(parts) == 1 else ConcatDataset(parts)
 
-    legacy_path = Path("data/processed") / f"{dataset_name}_{split}.pt"
+    legacy_path = _PROJECT_ROOT / "data" / "processed" / f"{dataset_name}_{split}.pt"
     if legacy_path.exists():
         return torch.load(legacy_path, weights_only=False)
 
