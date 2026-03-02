@@ -57,7 +57,7 @@ for SWEEP_YAML in "${SWEEP_YAMLS[@]}"; do
     echo "── ${SWEEP_YAML} ──"
 
     SWEEP_BASE=$(basename "${SWEEP_YAML}" .yaml | sed 's/^ablation_//' | sed 's/_quick$//')
-    SWEEP_NAME="quick_${SWEEP_BASE}_$(date +%H:00)"
+    SWEEP_NAME="quick_${SWEEP_BASE}_$(date +%d-%m_%H-00)"
 
     SWEEP_OUTPUT=$(cd "$PROJECT_ROOT" && wandb sweep "${SWEEP_YAML}" \
         --project "${WANDB_PROJECT}" --name "${SWEEP_NAME}" 2>&1)
