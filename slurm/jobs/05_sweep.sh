@@ -79,6 +79,7 @@ JOB_ID=$(sbatch --parsable <<EOF
 #SBATCH --mem=${MEM}
 #SBATCH --cpus-per-task=${CPUS}
 #SBATCH --gres=gpu:${GPUS}
+#SBATCH --constraint=gpu_cc:7.0
 #SBATCH --array=1-${NUM_AGENTS}
 #SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.out
 #SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.err
@@ -90,7 +91,9 @@ echo "Agent index: \${SLURM_ARRAY_TASK_ID}"
 echo "Node: \$(hostname)"
 echo "Job ID: \${SLURM_JOB_ID}"
 
-export WANDB_CPU_COUNT=${SLURM_CPUS_PER_TASK:-8}
+export WANDB_CPU_COUNT=\${SLURM_CPUS_PER_TASK:-8}
+export OMP_NUM_THREADS=\${SLURM_CPUS_PER_TASK:-8}
+export MKL_NUM_THREADS=\${SLURM_CPUS_PER_TASK:-8}
 
 wandb agent ${AGENT_TARGET} --count 1
 EOF

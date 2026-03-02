@@ -46,10 +46,6 @@ command:
   - --device
   - auto
   - --epochs
-  - "2000"
-  - --max_training_hours
-  - "3"
+  - "200"
   - --archetype
   - occam
-  - --base_model_dir
-  - output/trained_models/PLACEHOLDER

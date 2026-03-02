@@ -30,7 +30,7 @@ def parse_args():
     # ── Runtime args (always from CLI, same for all array tasks) ──────────────
     p.add_argument('--dataset',       type=str, default='pdbbind_U_bindingnet_ligsim90')
     p.add_argument('--device',        type=str, default='auto')
-    p.add_argument('--num_workers',   type=int, default=0)
+    p.add_argument('--num_workers',   type=int, default=8)
     p.add_argument('--epochs',        type=int, default=Config.NUM_EPOCHS)
     p.add_argument('--batch_size',    type=int, default=Config.BATCH_SIZE)
     p.add_argument('--model',         type=str, default=Config.MODEL_NAME)
