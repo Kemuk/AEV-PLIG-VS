@@ -126,6 +126,22 @@ class Config:
     # ==================== Multiprocessing ====================
     DEFAULT_NUM_WORKERS = 0  # 0 means use all available CPU cores
 
+    @staticmethod
+    def get_cpu_count():
+        """
+        Get the number of CPUs available, respecting SLURM allocation.
+
+        Checks SLURM_CPUS_PER_TASK first (set by --cpus-per-task in SLURM),
+        then falls back to os.cpu_count().
+
+        Returns:
+            int: Number of CPUs to use
+        """
+        slurm_cpus = os.environ.get('SLURM_CPUS_PER_TASK')
+        if slurm_cpus is not None:
+            return int(slurm_cpus)
+        return os.cpu_count()
+
     # ==================== Device ====================
     @staticmethod
     def get_device(device_param='auto'):

@@ -89,7 +89,9 @@ echo "Agent index: \${SLURM_ARRAY_TASK_ID}"
 echo "Node: \$(hostname)"
 echo "Job ID: \${SLURM_JOB_ID}"
 
-export WANDB_CPU_COUNT=${SLURM_CPUS_PER_TASK:-8}
+export WANDB_CPU_COUNT=\${SLURM_CPUS_PER_TASK:-8}
+export OMP_NUM_THREADS=\${SLURM_CPUS_PER_TASK:-8}
+export MKL_NUM_THREADS=\${SLURM_CPUS_PER_TASK:-8}
 
 wandb agent ${AGENT_TARGET} --count 1
 EOF

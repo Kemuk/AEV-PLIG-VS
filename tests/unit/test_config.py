@@ -2,8 +2,29 @@
 Unit tests for Config class, especially seed validation.
 """
 
+import os
 import pytest
 from aev_plig.config import Config
+
+
+class TestConfigGetCpuCount:
+    """Tests for Config.get_cpu_count()"""
+
+    def test_returns_slurm_cpus_when_set(self, monkeypatch):
+        """get_cpu_count() returns SLURM_CPUS_PER_TASK when set."""
+        monkeypatch.setenv('SLURM_CPUS_PER_TASK', '4')
+        assert Config.get_cpu_count() == 4
+
+    def test_falls_back_to_os_cpu_count(self, monkeypatch):
+        """get_cpu_count() falls back to os.cpu_count() when SLURM var is unset."""
+        monkeypatch.delenv('SLURM_CPUS_PER_TASK', raising=False)
+        assert Config.get_cpu_count() == os.cpu_count()
+
+    def test_returns_int(self, monkeypatch):
+        """get_cpu_count() always returns an int."""
+        monkeypatch.setenv('SLURM_CPUS_PER_TASK', '16')
+        result = Config.get_cpu_count()
+        assert isinstance(result, int)
 
 
 class TestConfigSeedValidation:

@@ -1,7 +1,6 @@
 """Train one seed (or the full ensemble) of AEV-PLIG GNN models."""
 import argparse
 import json
-import os
 import pickle
 import random
 import time
@@ -55,7 +54,12 @@ def main():
     device = Config.get_device(args.device)
     args.device = device
     if args.num_workers <= 0:
-        args.num_workers = os.cpu_count()
+        args.num_workers = Config.get_cpu_count()
+
+    # Pin PyTorch internal thread pools to match SLURM allocation
+    torch.set_num_threads(args.num_workers)
+    torch.set_num_interop_threads(1)
+
     if device.type == 'cuda':
         torch.backends.cudnn.benchmark = True
 
