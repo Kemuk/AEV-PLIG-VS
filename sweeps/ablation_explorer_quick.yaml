@@ -13,8 +13,6 @@ metric:
 run_cap: 10
 
 parameters:
-  archetype:
-    value: explorer
   freeze_gnn:
     value: false
   lr_body:
@@ -40,3 +38,5 @@ command:
   - auto
   - --epochs
   - "2"
+  - --archetype
+  - explorer

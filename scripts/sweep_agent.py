@@ -39,6 +39,11 @@ def parse_args():
     p.add_argument('--no_wandb',      action='store_true',
                    help='Skip W&B; use CLI HP args below for local smoke-testing')
 
+    # ── Runtime args from YAML command: section ────────────────────────────────
+    p.add_argument('--base_model_dir',     type=str,   default=None)
+    p.add_argument('--max_training_hours', type=float, default=None)
+    p.add_argument('--archetype',          type=str,   default=None)
+
     # ── HP fallback args — only used when --no_wandb is set ───────────────────
     p.add_argument('--hidden_dim',          type=int,   default=Config.HIDDEN_DIM)
     p.add_argument('--head',                type=int,   default=Config.NUM_ATTENTION_HEADS)
@@ -80,6 +85,9 @@ def main():
         model_type=args.model,
         run_name=run_name,
         wandb_run=wandb_run,
+        base_model_dir=args.base_model_dir,
+        max_training_hours=args.max_training_hours,
+        archetype=args.archetype,
     )
 
 

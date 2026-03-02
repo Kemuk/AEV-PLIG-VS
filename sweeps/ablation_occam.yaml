@@ -20,12 +20,6 @@ metric:
 run_cap: 10
 
 parameters:
-  archetype:
-    value: occam
-  base_model_dir:
-    value: "output/trained_models/PLACEHOLDER"  # edit before running
-  max_training_hours:
-    value: 3
   freeze_gnn:
     value: false
   lr_body:
@@ -53,3 +47,9 @@ command:
   - auto
   - --epochs
   - "2000"
+  - --max_training_hours
+  - "3"
+  - --archetype
+  - occam
+  - --base_model_dir
+  - output/trained_models/PLACEHOLDER

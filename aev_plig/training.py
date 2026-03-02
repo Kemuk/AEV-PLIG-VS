@@ -456,6 +456,9 @@ def train_model(
     model_type: str = Config.MODEL_NAME,
     run_name: str,
     wandb_run=None,
+    base_model_dir=None,
+    max_training_hours=None,
+    archetype=None,
 ):
     """Train one model and log val metrics.  Returns the trained model directory.
 
@@ -502,9 +505,12 @@ def train_model(
     freeze_gnn         = getattr(hp_config, 'freeze_gnn',         False)
     lr_body            = getattr(hp_config, 'lr_body',            None)
     lr_head            = getattr(hp_config, 'lr_head',            None)
-    base_model_dir     = getattr(hp_config, 'base_model_dir',     None)
-    max_training_hours = getattr(hp_config, 'max_training_hours', None)
-    archetype          = getattr(hp_config, 'archetype',          None)
+    if base_model_dir is None:
+        base_model_dir = getattr(hp_config, 'base_model_dir', None)
+    if max_training_hours is None:
+        max_training_hours = getattr(hp_config, 'max_training_hours', None)
+    if archetype is None:
+        archetype = getattr(hp_config, 'archetype', None)
 
     model = get_model(
         model_type,

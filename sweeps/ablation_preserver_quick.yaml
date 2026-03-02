@@ -13,12 +13,8 @@ metric:
 run_cap: 10
 
 parameters:
-  archetype:
-    value: preserver
   freeze_gnn:
     value: true
-  lr_body:
-    value: 0.0
   lr_head:
     distribution: log_uniform_values
     min: 1.0e-05
@@ -38,3 +34,5 @@ command:
   - auto
   - --epochs
   - "2"
+  - --archetype
+  - preserver

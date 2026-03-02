@@ -56,8 +56,11 @@ echo ""
 for SWEEP_YAML in "${SWEEP_YAMLS[@]}"; do
     echo "── ${SWEEP_YAML} ──"
 
+    SWEEP_BASE=$(basename "${SWEEP_YAML}" .yaml | sed 's/^ablation_//' | sed 's/_quick$//')
+    SWEEP_NAME="quick_${SWEEP_BASE}_$(date +%Y%m%d_%H%M%S)"
+
     SWEEP_OUTPUT=$(cd "$PROJECT_ROOT" && wandb sweep "${SWEEP_YAML}" \
-        --project "${WANDB_PROJECT}" --name "quick_test_$(date +%Y%m%d_%H%M%S)" 2>&1)
+        --project "${WANDB_PROJECT}" --name "${SWEEP_NAME}" 2>&1)
     echo "$SWEEP_OUTPUT"
 
     AGENT_TARGET=$(echo "$SWEEP_OUTPUT" | grep -oP '(?<=wandb agent )[^\s]+' | tail -1)
@@ -67,7 +70,7 @@ for SWEEP_YAML in "${SWEEP_YAMLS[@]}"; do
 
     JOB_ID=$(sbatch --parsable <<EOF
 #!/bin/bash
-#SBATCH --job-name=sweep_quick_$(basename "${SWEEP_YAML}" .yaml)
+#SBATCH --job-name=sweep_quick_${SWEEP_BASE}
 #SBATCH --cluster=${CLUSTER_NAME}
 #SBATCH --partition=${PARTITION}
 #SBATCH --time=${TIME_LIMIT}
