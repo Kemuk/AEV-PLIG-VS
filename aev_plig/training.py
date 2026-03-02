@@ -247,7 +247,7 @@ class Trainer:
         total_loss = 0.0
 
         for batch_idx, data in enumerate(self.train_loader):
-            data = data.to(self.device)
+            data = data.to(self.device, non_blocking=True)
             self.optimizer.zero_grad()
 
             with autocast('cuda', enabled=self.use_amp):
@@ -302,7 +302,7 @@ class Trainer:
 
         with torch.no_grad():
             for data in self.valid_loader:
-                data = data.to(self.device)
+                data = data.to(self.device, non_blocking=True)
 
                 with autocast('cuda', enabled=self.use_amp):
                     output = self.model(data)
@@ -412,7 +412,7 @@ class Trainer:
 
         with torch.no_grad():
             for data in test_loader:
-                data = data.to(self.device)
+                data = data.to(self.device, non_blocking=True)
 
                 with autocast('cuda', enabled=self.use_amp):
                     output = self.model(data)
@@ -559,9 +559,9 @@ def train_model(
         json.dump(config_dict, f, indent=2)
 
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True,
-                              num_workers=num_workers)
+                              num_workers=num_workers, pin_memory=True, persistent_workers=(num_workers > 0))
     valid_loader = DataLoader(valid_data, batch_size=batch_size, shuffle=False,
-                              num_workers=num_workers)
+                              num_workers=num_workers, pin_memory=True, persistent_workers=(num_workers > 0))
 
     trainer = Trainer(
         model=model,

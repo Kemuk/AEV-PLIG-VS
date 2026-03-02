@@ -30,6 +30,7 @@ MEM="${MEM_STANDARD}"
 CPUS="${CPUS_STANDARD}"
 GPUS=1
 WANDB_PROJECT="aev-plig-dev"
+NUM_AGENTS=3
 
 # Default: all 3 archetypes.  Pass a single YAML to test one.
 if [[ $# -gt 0 ]]; then
@@ -57,7 +58,7 @@ for SWEEP_YAML in "${SWEEP_YAMLS[@]}"; do
     echo "── ${SWEEP_YAML} ──"
 
     SWEEP_BASE=$(basename "${SWEEP_YAML}" .yaml | sed 's/^ablation_//' | sed 's/_quick$//')
-    SWEEP_NAME="quick_${SWEEP_BASE}_$(date +%d-%m_%H-00)"
+    SWEEP_NAME="${SWEEP_BASE}_$(date +%d-%m_%H-00)"
 
     SWEEP_OUTPUT=$(cd "$PROJECT_ROOT" && wandb sweep "${SWEEP_YAML}" \
         --project "${WANDB_PROJECT}" --name "${SWEEP_NAME}" 2>&1)
@@ -68,7 +69,7 @@ for SWEEP_YAML in "${SWEEP_YAMLS[@]}"; do
 
     echo "Agent target: ${AGENT_TARGET}"
 
-    JOB_ID=$(sbatch --parsable <<EOF
+JOB_ID=$(sbatch --parsable <<EOF
 #!/bin/bash
 #SBATCH --job-name=sweep_quick_${SWEEP_BASE}
 #SBATCH --cluster=${CLUSTER_NAME}
@@ -77,27 +78,22 @@ for SWEEP_YAML in "${SWEEP_YAMLS[@]}"; do
 #SBATCH --mem=${MEM}
 #SBATCH --cpus-per-task=${CPUS}
 #SBATCH --gres=gpu:${GPUS}
-#SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%j.out
-#SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%j.err
+#SBATCH --array=1-${NUM_AGENTS}
+#SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.out
+#SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.err
 #SBATCH --chdir=${PROJECT_ROOT}
 
 source ${PROJECT_ROOT}/slurm/config.sh
 
-echo "========================================="
-echo "QUICK TEST: ${SWEEP_YAML}"
-echo "========================================="
-echo "Node:     \$(hostname)"
-echo "Job ID:   \${SLURM_JOB_ID}"
-echo "Sweep:    ${AGENT_TARGET}"
-echo "========================================="
-echo ""
+echo "Agent index: \${SLURM_ARRAY_TASK_ID}"
+echo "Node: \$(hostname)"
+echo "Job ID: \${SLURM_JOB_ID}"
+
+export WANDB_CPU_COUNT=${SLURM_CPUS_PER_TASK:-8}
 
 wandb agent ${AGENT_TARGET} --count 1
-
-echo ""
-echo "✓ Quick test agent complete"
 EOF
-    )
+)
 
     echo "Submitted job ${JOB_ID}"
     echo ""

@@ -1,21 +1,20 @@
 #!/bin/bash
 # =============================================================================
-# Submit W&B Bayesian sweep agent array job.
+# Quick sweep test (devel partition, 10 min limit).
 #
-# Each SLURM task runs one W&B agent (--count 1) which requests a single HP
-# configuration from the Bayesian controller, trains, logs val_pearson_r, and
-# exits.  W&B coordinates across tasks automatically.
+# Differences from production (slurm/jobs/05_sweep.sh):
+# - 1 agent per sweep (vs 50)
+# - 200 epochs per run (set in the *_quick.yaml command section)
+# - devel partition (10 min max)
+# - W&B project: aev-plig-dev (not aev-plig-vs)
+# - Creates its own sweep automatically (no pre-existing SWEEP_ID required)
 #
-# Pre-requisite:
-#   wandb sweep sweeps/gatv2net_sweep.yaml --project aev-plig-vs
-#   → prints SWEEP_ID
+# Tests the full W&B agent ←→ controller handshake and train_model() code path.
+# Jobs may timeout — this is expected on the devel partition.
 #
 # Usage:
-#   ./slurm/jobs/05_sweep.sh <SWEEP_ID> [--agents N] [--dataset DATASET]
-#
-# Options:
-#   --agents N        Number of parallel sweep agents (default: 50)
-#   --dataset NAME    Training dataset name (default: from config.sh)
+#   ./slurm/tests/jobs/05_sweep_quick.sh                                      # all 3 archetypes
+#   ./slurm/tests/jobs/05_sweep_quick.sh sweeps/ablation_preserver_quick.yaml  # one archetype
 # =============================================================================
 set -euo pipefail
 
@@ -24,97 +23,90 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$PROJECT_ROOT/slurm/config.sh"
 
-# Required positional: sweep ID from `wandb sweep` output
-SWEEP_ID="${1:?Usage: $0 <SWEEP_ID> [--agents N] [--dataset DATASET]}"
-shift
-
-# Defaults
-NUM_AGENTS=50
-DATASET="${DATASET_NAME}"
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --agents)  NUM_AGENTS="$2"; shift 2 ;;
-        --dataset) DATASET="$2";    shift 2 ;;
-        *) shift ;;
-    esac
-done
-
-# SLURM settings (matching 03_train.sh conventions)
+# Quick test settings
 PARTITION="${PARTITION_SHORT}"
-TIME_LIMIT="04:00:00"
+TIME_LIMIT="03:00:00"
 MEM="${MEM_STANDARD}"
 CPUS="${CPUS_STANDARD}"
-GPUS="v100:1"
+export WANDB_CPU_COUNT=${CPUS}
+GPUS=1
+WANDB_PROJECT="aev-plig-vs"
+NUM_AGENTS=10
 
-# W&B entity — falls back to wandb default (logged-in user) if unset
-ENTITY="${WANDB_ENTITY:-}"
-if [[ -n "$ENTITY" ]]; then
-    AGENT_TARGET="${ENTITY}/aev-plig-vs/${SWEEP_ID}"
+# Default: all 3 archetypes.  Pass a single YAML to test one.
+if [[ $# -gt 0 ]]; then
+    SWEEP_YAMLS=("$1")
 else
-    AGENT_TARGET="aev-plig-vs/${SWEEP_ID}"
+    SWEEP_YAMLS=(
+        sweeps/ablation_preserver.yaml
+        sweeps/ablation_explorer.yaml
+        sweeps/ablation_occam.yaml
+    )
 fi
 
 mkdir -p "$PROJECT_ROOT/slurm/logs"
 
 echo "========================================"
-echo "W&B Sweep Agent Submission"
+echo "PRODUCTION: W&B Sweep Agent"
 echo "========================================"
-echo "Sweep ID:   ${SWEEP_ID}"
-echo "Target:     ${AGENT_TARGET}"
-echo "Dataset:    ${DATASET}"
-echo "Agents:     ${NUM_AGENTS}"
-echo "Partition:  ${PARTITION} (${TIME_LIMIT})"
-echo "GPU:        ${GPUS}"
+echo "Sweeps:     ${#SWEEP_YAMLS[@]}"
+echo "Partition:  ${PARTITION}"
+echo "W&B:        ${WANDB_PROJECT}"
 echo "========================================"
 echo ""
 
-JOB_ID=$(sbatch --parsable --array=1-${NUM_AGENTS} <<EOF
+for SWEEP_YAML in "${SWEEP_YAMLS[@]}"; do
+    echo "── ${SWEEP_YAML} ──"
+
+    SWEEP_BASE=$(basename "${SWEEP_YAML}" .yaml | sed 's/^ablation_//' | sed 's/_quick$//')
+    SWEEP_NAME="${SWEEP_BASE}_$(date +%d-%m_%H-00)"
+
+    SWEEP_OUTPUT=$(cd "$PROJECT_ROOT" && wandb sweep "${SWEEP_YAML}" \
+        --project "${WANDB_PROJECT}" --name "${SWEEP_NAME}" 2>&1)
+    echo "$SWEEP_OUTPUT"
+
+    AGENT_TARGET=$(echo "$SWEEP_OUTPUT" | grep -oP '(?<=wandb agent )[^\s]+' | tail -1)
+    [[ -z "$AGENT_TARGET" ]] && { echo "ERROR: Could not extract agent target. Check W&B login."; exit 1; }
+
+    echo "Agent target: ${AGENT_TARGET}"
+
+JOB_ID=$(sbatch --parsable <<EOF
 #!/bin/bash
-#SBATCH --job-name=sweep_agent
+#SBATCH --job-name=sweep_quick_${SWEEP_BASE}
 #SBATCH --cluster=${CLUSTER_NAME}
 #SBATCH --partition=${PARTITION}
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --mem=${MEM}
 #SBATCH --cpus-per-task=${CPUS}
 #SBATCH --gres=gpu:${GPUS}
+#SBATCH --array=1-${NUM_AGENTS}
 #SBATCH --output=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.out
 #SBATCH --error=${PROJECT_ROOT}/slurm/logs/%x_%A_%a.err
 #SBATCH --chdir=${PROJECT_ROOT}
 
 source ${PROJECT_ROOT}/slurm/config.sh
 
-echo "========================================="
-echo "W&B Sweep Agent"
-echo "========================================="
-echo "Node:     \$(hostname)"
-echo "Job ID:   \${SLURM_JOB_ID} (task \${SLURM_ARRAY_TASK_ID})"
-echo "Sweep:    ${SWEEP_ID}"
-echo "========================================="
-echo ""
+echo "Agent index: \${SLURM_ARRAY_TASK_ID}"
+echo "Node: \$(hostname)"
+echo "Job ID: \${SLURM_JOB_ID}"
+
+export WANDB_CPU_COUNT=${SLURM_CPUS_PER_TASK:-8}
 
 wandb agent ${AGENT_TARGET} --count 1
-
-echo ""
-echo "✓ Sweep agent complete (task \${SLURM_ARRAY_TASK_ID})"
 EOF
 )
 
+    echo "Submitted job ${JOB_ID}"
+    echo ""
+done
+
 echo "========================================"
-echo "✓ Submitted array job (${NUM_AGENTS} agents)"
+echo "✓ All sweeps submitted"
 echo "========================================"
-echo "Job ID: ${JOB_ID}  (tasks ${JOB_ID}_1 to ${JOB_ID}_${NUM_AGENTS})"
 echo ""
 echo "Monitor jobs with:"
 echo "  squeue -u \$USER --cluster=${CLUSTER_NAME}"
 echo ""
 echo "View logs in:"
 echo "  ${PROJECT_ROOT}/slurm/logs/"
-echo ""
-echo "After sweep completes, select top runs from W&B dashboard, then:"
-echo "  for run in <run1> <run2> ...; do"
-echo "    python scripts/predict.py --trained_model_name \$run --dataset_csv <CSV> --data_name <NAME>"
-echo "  done"
-echo "  python scripts/merge_sweep.py --trained_model_names <run1> <run2> ... \\"
-echo "    --data_name <NAME> --output_name GATv2Net_sweep_${SWEEP_ID}"
 echo "========================================"

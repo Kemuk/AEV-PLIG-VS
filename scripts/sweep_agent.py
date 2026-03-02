@@ -68,17 +68,22 @@ def main():
         wandb_run = None
     else:
         import wandb
-        run_name = (
-            f"quick_{args.archetype}_{time.strftime('%d-%m_%H-00')}"
-            if args.archetype else None
-        )
+
         wandb_run = wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
-            name=run_name,
         )
+
+        seed = wandb_run.config.get("seed")
+
+        run_name = (
+            f"{args.archetype}_{time.strftime('%d-%m_%H-00')}_{seed}"
+            if args.archetype else None
+        )
+
         hp = wandb.config
-        run_name = wandb.run.name
+
+        wandb.run.name = run_name
 
     train_model(
         hp,
