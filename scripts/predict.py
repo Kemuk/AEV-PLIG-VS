@@ -21,7 +21,7 @@ def parse_args():
     p.add_argument('--trained_model_name', type=str,
                    default='model_GATv2Net_ligsim90_fep_benchmark')
     p.add_argument('--dataset_csv',        type=str, default=None)
-    p.add_argument('--data_name',          type=str, default='example')
+    p.add_argument('--data_name',          type=str, default='pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark')
     p.add_argument('--use_processed',      action='store_true')
     p.add_argument('--skip_validation',    action='store_true')
     # Backward compat: ignored if {trained_model_name}/config.json exists
