@@ -54,9 +54,7 @@ def _(mo):
 def _():
     TRAINED_MODEL_NAMES = [
         "model_GATv2Net_ligsim90_fep_benchmark",
-        "GATv2NetAleatoric_20260212_173128",
-        "GATv2NetBayesianMixedPrecision_2026-02-27_01-00",
-        "GATv2NetMixedPrecision_2026-02-26_13-00",
+        "occam_03-03_02-00",
     ]
     DATA_NAME          = "pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark"
     TRUTH_COL          = "pK"
