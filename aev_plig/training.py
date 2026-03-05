@@ -717,6 +717,8 @@ class RetrievalTrainer:
 
             metrics_df = self.validate()
             mean_bedroc = metrics_df['bedroc'].mean()
+            if mean_bedroc is None:
+                mean_bedroc = 0.0
 
             print(f'Val BEDROC: {mean_bedroc:.4f} (best: {self.best_bedroc:.4f})')
 
