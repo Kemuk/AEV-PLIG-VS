@@ -8,6 +8,7 @@ binding affinity prediction models.
 import time
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from pathlib import Path
 from torch.amp import autocast, GradScaler
@@ -589,64 +590,57 @@ def train_model(
 
 # ==================== Retrieval / Ranking ====================
 
-def pairwise_ranking_loss(scores, target_labels, affinities, margin=1.0):
+def inbatch_contrastive_loss(protein_emb, ligand_emb, temperature=None):
     """
-    Pairwise margin ranking loss over same-target complexes.
+    CLIP-style in-batch contrastive loss for protein-ligand matching.
 
-    For all pairs (i, j) where target_i == target_j and pK_i > pK_j,
-    enforces score_i > score_j by at least `margin`.
+    Every other complex in the batch is treated as a negative. The diagonal
+    of the B×B similarity matrix contains the positive (true) pairs.
 
     Args:
-        scores: Tensor [N, 1] — model output (scalar score per complex)
-        target_labels: Tensor [N] — int-encoded target IDs
-        affinities: Tensor [N] — true pK values
-        margin: Ranking margin (default 1.0)
+        protein_emb: Tensor [B, D] — protein-contribution embeddings
+        ligand_emb: Tensor [B, D] — ligand-contribution embeddings
+        temperature: Softmax temperature (default from RetrievalConfig)
 
     Returns:
-        Scalar loss tensor, or 0.0 tensor if no valid pairs exist.
+        Scalar loss tensor.
     """
-    scores = scores.squeeze(-1)  # [N]
-    device = scores.device
+    if temperature is None:
+        temperature = RetrievalConfig.TEMPERATURE
 
-    # Build mask of same-target pairs where pK_i > pK_j
-    same_target = target_labels.unsqueeze(0) == target_labels.unsqueeze(1)  # [N, N]
-    higher_affinity = affinities.unsqueeze(1) > affinities.unsqueeze(0)     # [N, N]
-    valid_pairs = same_target & higher_affinity  # [N, N]
+    protein_emb = F.normalize(protein_emb, dim=-1)
+    ligand_emb = F.normalize(ligand_emb, dim=-1)
 
-    idx_i, idx_j = torch.where(valid_pairs)
-    if len(idx_i) == 0:
-        return torch.tensor(0.0, device=device, requires_grad=True)
-
-    loss_fn = nn.MarginRankingLoss(margin=margin)
-    target = torch.ones(len(idx_i), device=device)
-    return loss_fn(scores[idx_i], scores[idx_j], target)
+    scores = protein_emb @ ligand_emb.T / temperature  # [B, B]
+    targets = torch.arange(scores.size(0), device=scores.device)
+    return F.cross_entropy(scores, targets)
 
 
 class RetrievalTrainer:
     """
-    Trainer for pairwise ranking loss on protein-ligand complexes.
+    Trainer for in-batch contrastive learning on protein-ligand complexes.
 
-    Uses TargetAwareBatchSampler to ensure each batch contains
-    multiple complexes per target for forming ranking pairs.
+    Uses GATv2NetRetrieval (dual projection heads) with CLIP-style loss.
+    Every other complex in the batch serves as a negative.
     Validation runs full retrieval evaluation via evaluate_retrieval().
 
     Args:
-        model: GATv2Net model (scalar output)
-        train_loader: DataLoader with TargetAwareBatchSampler
+        model: GATv2NetRetrieval model (dual embedding output)
+        train_loader: DataLoader (regular shuffled batching)
         valid_data: list of PyG Data objects for validation
         device: torch.device
         lr: Learning rate
         weight_decay: Weight decay
-        margin: Margin for pairwise ranking loss
+        temperature: Contrastive loss temperature
     """
 
     def __init__(self, model, train_loader, valid_data, device,
-                 lr=None, weight_decay=None, margin=None):
+                 lr=None, weight_decay=None, temperature=None):
         self.model = model
         self.train_loader = train_loader
         self.valid_data = valid_data
         self.device = device
-        self.margin = margin if margin is not None else RetrievalConfig.MARGIN
+        self.temperature = temperature if temperature is not None else RetrievalConfig.TEMPERATURE
 
         if lr is None:
             lr = RetrievalConfig.LEARNING_RATE
@@ -659,24 +653,6 @@ class RetrievalTrainer:
 
         self.best_bedroc = -1.0
 
-    def _encode_target_labels(self, batch):
-        """Extract target labels and affinities from a PyG Batch object."""
-        # unique_id is the target label (e.g., PDB code)
-        labels = batch.unique_id
-        # Map string labels to ints for the batch
-        unique = list(set(labels))
-        label_to_int = {l: i for i, l in enumerate(unique)}
-        target_ids = torch.tensor(
-            [label_to_int[l] for l in labels],
-            device=self.device
-        )
-        affinities = torch.tensor(
-            [batch[i].pK for i in range(len(labels))],
-            dtype=torch.float32,
-            device=self.device
-        )
-        return target_ids, affinities
-
     def train_epoch(self, epoch, log_interval=50):
         """Train for one epoch. Returns average loss."""
         self.model.train()
@@ -687,9 +663,8 @@ class RetrievalTrainer:
             data = data.to(self.device, non_blocking=True)
             self.optimizer.zero_grad()
 
-            scores = self.model(data)
-            target_ids, affinities = self._encode_target_labels(data)
-            loss = pairwise_ranking_loss(scores, target_ids, affinities, self.margin)
+            protein_emb, ligand_emb = self.model(data)
+            loss = inbatch_contrastive_loss(protein_emb, ligand_emb, self.temperature)
 
             loss.backward()
             self.optimizer.step()

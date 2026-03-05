@@ -8,15 +8,19 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
 from aev_plig.config import RetrievalConfig
-from aev_plig.datasets import TargetAwareBatchSampler, get_target_labels
 from aev_plig.models import get_model
-from aev_plig.training import pairwise_ranking_loss
+from aev_plig.training import inbatch_contrastive_loss
 
 NODE_DIM = 25
 EDGE_DIM = 4
 
 
 # ==================== Helpers ====================
+
+
+def _make_retrieval_model(node_dim=NODE_DIM, edge_dim=EDGE_DIM):
+    """Create a small GATv2NetRetrieval for testing."""
+    return get_model('GATv2NetRetrieval', node_feature_dim=node_dim, edge_feature_dim=edge_dim)
 
 
 def _make_model(node_dim=NODE_DIM, edge_dim=EDGE_DIM):
@@ -51,96 +55,108 @@ def _make_multi_target_dataset():
     return dataset
 
 
-# ==================== Pairwise Ranking Loss ====================
+# ==================== In-Batch Contrastive Loss ====================
 
 
-class TestPairwiseRankingLoss:
+class TestInbatchContrastiveLoss:
     def test_basic_output(self):
         """Loss should be a scalar tensor with gradients."""
-        scores = torch.tensor([[3.0], [1.0], [2.0], [0.5]], requires_grad=True)
-        target_labels = torch.tensor([0, 0, 1, 1])
-        affinities = torch.tensor([8.0, 6.0, 7.0, 5.0])
+        protein_emb = torch.randn(4, 128, requires_grad=True)
+        ligand_emb = torch.randn(4, 128, requires_grad=True)
 
-        loss = pairwise_ranking_loss(scores, target_labels, affinities)
+        loss = inbatch_contrastive_loss(protein_emb, ligand_emb)
         assert loss.shape == ()
         assert loss.requires_grad
 
         loss.backward()
-        assert scores.grad is not None
+        assert protein_emb.grad is not None
+        assert ligand_emb.grad is not None
 
-    def test_correct_ranking_zero_loss(self):
-        """Loss should be 0 when rankings are correct with sufficient margin."""
-        scores = torch.tensor([[10.0], [5.0]], requires_grad=True)
-        target_labels = torch.tensor([0, 0])
-        affinities = torch.tensor([8.0, 6.0])
+    def test_perfect_alignment_low_loss(self):
+        """Loss should be low when embeddings are perfectly aligned on diagonal."""
+        # Make protein and ligand embeddings identical (perfect match on diagonal)
+        emb = torch.randn(4, 128)
+        protein_emb = emb.clone().requires_grad_(True)
+        ligand_emb = emb.clone().requires_grad_(True)
 
-        loss = pairwise_ranking_loss(scores, target_labels, affinities, margin=1.0)
-        # score diff = 5.0 >> margin=1.0, so loss should be 0
-        assert loss.item() == pytest.approx(0.0, abs=1e-6)
+        loss = inbatch_contrastive_loss(protein_emb, ligand_emb, temperature=1.0)
+        # With identical embeddings, diagonal has score 1.0, off-diagonal < 1.0
+        # Loss should be relatively low
+        assert loss.item() < 2.0  # cross-entropy on near-identity matrix
 
-    def test_no_same_target_pairs(self):
-        """Returns 0.0 when no same-target pairs exist."""
-        scores = torch.tensor([[3.0], [1.0]], requires_grad=True)
-        target_labels = torch.tensor([0, 1])  # different targets
-        affinities = torch.tensor([8.0, 6.0])
+    def test_random_embeddings_higher_loss(self):
+        """Random embeddings should have higher loss than aligned ones."""
+        torch.manual_seed(42)
+        emb = torch.randn(8, 128)
 
-        loss = pairwise_ranking_loss(scores, target_labels, affinities)
-        assert loss.item() == pytest.approx(0.0, abs=1e-6)
+        # Aligned
+        loss_aligned = inbatch_contrastive_loss(
+            emb.clone(), emb.clone(), temperature=1.0
+        ).item()
 
-    def test_wrong_ranking_nonzero_loss(self):
-        """Loss should be positive when ranking is wrong."""
-        # Higher affinity complex gets lower score
-        scores = torch.tensor([[1.0], [3.0]], requires_grad=True)
-        target_labels = torch.tensor([0, 0])
-        affinities = torch.tensor([8.0, 6.0])  # first has higher affinity
+        # Random
+        loss_random = inbatch_contrastive_loss(
+            torch.randn(8, 128), torch.randn(8, 128), temperature=1.0
+        ).item()
 
-        loss = pairwise_ranking_loss(scores, target_labels, affinities, margin=1.0)
-        assert loss.item() > 0
+        assert loss_random > loss_aligned
 
+    def test_temperature_scaling(self):
+        """Lower temperature should produce sharper distributions (higher loss for random)."""
+        torch.manual_seed(42)
+        p = torch.randn(4, 128)
+        l = torch.randn(4, 128)
 
-# ==================== Target-Aware Batch Sampler ====================
+        loss_high_temp = inbatch_contrastive_loss(p, l, temperature=1.0).item()
+        loss_low_temp = inbatch_contrastive_loss(p, l, temperature=0.07).item()
 
-
-class TestTargetAwareBatchSampler:
-    def test_batches_have_multiple_per_target(self):
-        """Each batch should have ≥2 complexes per target."""
-        labels = ['A'] * 5 + ['B'] * 5 + ['C'] * 5
-        sampler = TargetAwareBatchSampler(labels, complexes_per_target=3, batch_size=12)
-
-        for batch_indices in sampler:
-            batch_labels = [labels[i] for i in batch_indices]
-            from collections import Counter
-            counts = Counter(batch_labels)
-            for target, count in counts.items():
-                assert count >= 2, f"Target {target} has only {count} in batch"
-
-    def test_excludes_singleton_targets(self):
-        """Targets with <2 complexes should be excluded."""
-        labels = ['A'] * 5 + ['B'] * 5 + ['singleton']
-        sampler = TargetAwareBatchSampler(labels, complexes_per_target=2, batch_size=8)
-
-        all_indices = []
-        for batch in sampler:
-            all_indices.extend(batch)
-
-        # Index 10 (singleton) should never appear
-        assert 10 not in all_indices
-
-    def test_len(self):
-        """__len__ should return number of batches."""
-        labels = ['A'] * 10 + ['B'] * 10
-        sampler = TargetAwareBatchSampler(labels, complexes_per_target=4, batch_size=8)
-        assert len(sampler) > 0
+        # Lower temperature amplifies differences
+        assert loss_low_temp > loss_high_temp
 
 
-# ==================== get_target_labels ====================
+# ==================== GATv2NetRetrieval Model ====================
 
 
-class TestGetTargetLabels:
-    def test_returns_unique_ids(self):
-        dataset = [_make_data("target1", 7.0), _make_data("target2", 6.0)]
-        labels = get_target_labels(dataset)
-        assert labels == ["target1", "target2"]
+class TestGATv2NetRetrieval:
+    def test_forward_returns_tuple(self):
+        """forward() should return (protein_emb, ligand_emb) tuple."""
+        model = _make_retrieval_model()
+        data = [_make_data("t1", 7.0) for _ in range(3)]
+        loader = DataLoader(data, batch_size=3)
+        batch = next(iter(loader))
+
+        output = model(batch)
+        assert isinstance(output, tuple)
+        assert len(output) == 2
+
+        protein_emb, ligand_emb = output
+        assert protein_emb.shape == (3, RetrievalConfig.EMBEDDING_DIM)
+        assert ligand_emb.shape == (3, RetrievalConfig.EMBEDDING_DIM)
+
+    def test_predict_returns_scalar(self):
+        """predict() should return scalar scores."""
+        model = _make_retrieval_model()
+        data = [_make_data("t1", 7.0) for _ in range(3)]
+        loader = DataLoader(data, batch_size=3)
+        batch = next(iter(loader))
+
+        scores = model.predict(batch)
+        assert scores.shape == (3, 1)
+
+    def test_custom_embed_dim(self):
+        """Should respect custom embed_dim from config."""
+        from types import SimpleNamespace
+        config = SimpleNamespace(embed_dim=64)
+        model = get_model('GATv2NetRetrieval',
+                          node_feature_dim=NODE_DIM, edge_feature_dim=EDGE_DIM,
+                          config=config)
+        data = [_make_data("t1", 7.0) for _ in range(2)]
+        loader = DataLoader(data, batch_size=2)
+        batch = next(iter(loader))
+
+        p, l = model(batch)
+        assert p.shape == (2, 64)
+        assert l.shape == (2, 64)
 
 
 # ==================== Predict Retrieval ====================
@@ -152,7 +168,7 @@ class TestPredictRetrieval:
         from aev_plig.prediction import predict_retrieval
 
         device = torch.device('cpu')
-        model = _make_model()
+        model = _make_retrieval_model()
         model.eval()
 
         dataset = _make_multi_target_dataset()
@@ -168,6 +184,18 @@ class TestPredictRetrieval:
         # Ranks should be 1-indexed
         assert df['predicted_rank'].min() == 1
         assert df['actual_rank'].min() == 1
+
+    def test_works_with_affinity_model(self):
+        """predict_retrieval should also work with standard GATv2Net."""
+        from aev_plig.prediction import predict_retrieval
+
+        device = torch.device('cpu')
+        model = _make_model()
+        model.eval()
+
+        dataset = _make_multi_target_dataset()
+        df = predict_retrieval(model, dataset, device)
+        assert len(df) == len(dataset)
 
 
 # ==================== Format Retrieval Scores ====================
@@ -231,9 +259,9 @@ class TestRDKitScoringIntegration:
 
 class TestTrainingStep:
     def test_forward_backward(self):
-        """One forward + backward pass should work."""
+        """One forward + backward pass through contrastive loss should work."""
         device = torch.device('cpu')
-        model = _make_model()
+        model = _make_retrieval_model()
         model.to(device)
         model.train()
 
@@ -245,12 +273,8 @@ class TestTrainingStep:
         batch = next(iter(loader))
         batch = batch.to(device)
 
-        scores = model(batch)
-        assert scores.shape == (4, 1)
-
-        target_ids = torch.tensor([0, 0, 1, 1], device=device)
-        affinities = torch.tensor([8.0, 6.0, 7.0, 5.0], device=device)
-        loss = pairwise_ranking_loss(scores, target_ids, affinities)
+        protein_emb, ligand_emb = model(batch)
+        loss = inbatch_contrastive_loss(protein_emb, ligand_emb)
 
         loss.backward()
         # Check gradients exist
@@ -269,7 +293,7 @@ class TestEvaluateRetrieval:
         from aev_plig.prediction import evaluate_retrieval
 
         device = torch.device('cpu')
-        model = _make_model()
+        model = _make_retrieval_model()
         model.eval()
 
         # Need enough data per target for meaningful metrics

@@ -674,9 +674,7 @@ def predict_retrieval(model, data, device):
     with torch.no_grad():
         for batch in loader:
             batch = batch.to(device, non_blocking=True)
-            output = model(batch)
-            if isinstance(output, tuple):
-                output = output[0]
+            output = model.predict(batch)
             scores.extend(output.cpu().squeeze(-1).tolist())
             unique_ids.extend(batch.unique_id)
             pks.extend([batch[i].pK for i in range(len(batch.unique_id))])

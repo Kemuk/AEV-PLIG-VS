@@ -1,4 +1,4 @@
-"""Train a GATv2Net with pairwise margin ranking loss for virtual screening."""
+"""Train a GATv2NetRetrieval with in-batch contrastive loss for virtual screening."""
 import argparse
 import json
 import os
@@ -10,12 +10,7 @@ import torch
 from torch_geometric.loader import DataLoader
 
 from aev_plig.config import Config, RetrievalConfig
-from aev_plig.datasets import (
-    TargetAwareBatchSampler,
-    get_target_labels,
-    init_weights,
-    load_split,
-)
+from aev_plig.datasets import init_weights, load_split
 from aev_plig.models import get_model
 from aev_plig.training import RetrievalTrainer
 
@@ -24,7 +19,7 @@ warnings.filterwarnings("ignore", message="cuaev not installed")
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description='Train GATv2Net with pairwise ranking loss for virtual screening'
+        description='Train GATv2NetRetrieval with contrastive loss for virtual screening'
     )
     p.add_argument('--dataset', type=str, required=True,
                    help='Dataset name (under data/processed/)')
@@ -32,15 +27,16 @@ def parse_args():
                    help='Name for this training run')
     p.add_argument('--epochs', type=int, default=RetrievalConfig.NUM_EPOCHS)
     p.add_argument('--batch-size', type=int, default=RetrievalConfig.BATCH_SIZE)
-    p.add_argument('--margin', type=float, default=RetrievalConfig.MARGIN)
+    p.add_argument('--temperature', type=float, default=RetrievalConfig.TEMPERATURE)
+    p.add_argument('--embed-dim', type=int, default=RetrievalConfig.EMBEDDING_DIM)
     p.add_argument('--lr', type=float, default=RetrievalConfig.LEARNING_RATE)
     p.add_argument('--weight-decay', type=float, default=RetrievalConfig.WEIGHT_DECAY)
     p.add_argument('--patience', type=int, default=RetrievalConfig.EARLY_STOPPING_PATIENCE)
-    p.add_argument('--complexes-per-target', type=int,
-                   default=RetrievalConfig.COMPLEXES_PER_TARGET)
+    p.add_argument('--num-workers', type=int, default=0,
+                   help='DataLoader workers (0 = main process)')
     p.add_argument('--device', type=str, default='auto')
     p.add_argument('--seed', type=int, default=42)
-    p.add_argument('--model', type=str, default='GATv2Net')
+    p.add_argument('--model', type=str, default='GATv2NetRetrieval')
     p.add_argument('--hidden_dim', type=int, default=Config.HIDDEN_DIM)
     p.add_argument('--head', type=int, default=Config.NUM_ATTENTION_HEADS)
     p.add_argument('--num_layers', type=int, default=Config.NUM_GNN_LAYERS)
@@ -78,15 +74,13 @@ def main():
     num_edge_features = train_data[0].edge_attr.shape[1]
     print(f"Node features: {num_node_features}  Edge features: {num_edge_features}")
 
-    # Build target-aware batch sampler
-    target_labels = get_target_labels(train_data)
-    sampler = TargetAwareBatchSampler(
-        target_labels,
-        complexes_per_target=args.complexes_per_target,
-        batch_size=args.batch_size,
-        seed=args.seed,
+    # DataLoader with optimizations matching train_model()
+    num_workers = args.num_workers
+    train_loader = DataLoader(
+        train_data, batch_size=args.batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=True,
+        persistent_workers=(num_workers > 0),
     )
-    train_loader = DataLoader(train_data, batch_sampler=sampler)
 
     # Create model
     model = get_model(
@@ -106,21 +100,21 @@ def main():
     config_dict = {
         'model': args.model,
         'task': 'retrieval',
-        'loss': 'margin_ranking',
+        'loss': 'contrastive',
         'hidden_dim': args.hidden_dim,
         'head': args.head,
         'activation_function': args.activation_function,
         'num_layers': args.num_layers,
+        'embed_dim': args.embed_dim,
         'node_feature_dim': num_node_features,
         'edge_feature_dim': num_edge_features,
         'dataset': args.dataset,
         'epochs': args.epochs,
         'batch_size': args.batch_size,
-        'margin': args.margin,
+        'temperature': args.temperature,
         'lr': args.lr,
         'weight_decay': args.weight_decay,
         'seed': args.seed,
-        'complexes_per_target': args.complexes_per_target,
     }
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(config_dict, f, indent=2)
@@ -144,7 +138,7 @@ def main():
         device=device,
         lr=args.lr,
         weight_decay=args.weight_decay,
-        margin=args.margin,
+        temperature=args.temperature,
     )
 
     best_bedroc = trainer.fit(

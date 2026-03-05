@@ -12,7 +12,7 @@ from torch_geometric.nn import GATv2Conv
 from torch_geometric.nn import global_max_pool as gmp
 from torch_geometric.nn import global_mean_pool as gap
 from torch_geometric.nn import BatchNorm
-from aev_plig.config import Config
+from aev_plig.config import Config, RetrievalConfig
 
 
 # Activation function registry
@@ -205,6 +205,33 @@ class GATv2NetMixedPrecision(GATv2Net):
             return super()._mlp_forward(x.float())
 
 
+class GATv2NetRetrieval(BaseGATv2Net):
+    """
+    GATv2Net with dual projection heads for contrastive retrieval.
+
+    Shared GNN backbone produces a 256-dim representation per complex,
+    then two linear heads project into separate protein-contribution and
+    ligand-contribution embedding spaces for in-batch contrastive learning.
+
+    forward() returns (protein_emb, ligand_emb) both [B, embed_dim].
+    predict() returns the dot-product score per complex (scalar).
+    """
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
+        super().__init__(node_feature_dim, edge_feature_dim, config)
+        mlp_dims = Config.MLP_DIMS
+        embed_dim = getattr(config, 'embed_dim', RetrievalConfig.EMBEDDING_DIM)
+        self.protein_head = nn.Linear(mlp_dims[2], embed_dim)
+        self.ligand_head = nn.Linear(mlp_dims[2], embed_dim)
+
+    def _output_head(self, x):
+        return self.protein_head(x), self.ligand_head(x)
+
+    def predict(self, data):
+        protein_emb, ligand_emb = self.forward(data)
+        return (protein_emb * ligand_emb).sum(dim=-1, keepdim=True)
+
+
 class GATv2NetBayesian(BaseGATv2Net):
     """
     True Bayesian GATv2Net via Variational Bayesian Last Layer (VBLL, ICLR 2024).
@@ -261,6 +288,7 @@ class GATv2NetBayesianMixedPrecision(GATv2NetBayesian):
 # Model registry for easy model selection
 MODEL_REGISTRY = {
     'GATv2Net':                       GATv2Net,
+    'GATv2NetRetrieval':              GATv2NetRetrieval,
     'GATv2NetAleatoric':              GATv2NetAleatoric,
     'GATv2NetBayesian':               GATv2NetBayesian,
     'GATv2NetMixedPrecision':         GATv2NetMixedPrecision,
