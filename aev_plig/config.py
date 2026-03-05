@@ -178,3 +178,21 @@ class Config:
             'EtaA': torch.tensor([Config.AEV_ANGULAR_ETA]),
             'RsA': torch.tensor([Config.AEV_ANGULAR_RS])
         }
+
+
+class RetrievalConfig:
+    """Configuration for retrieval / virtual screening mode."""
+
+    # ==================== Training ====================
+    TEMPERATURE = 0.07
+    EMBEDDING_DIM = 128
+    LEARNING_RATE = 1e-4
+    WEIGHT_DECAY = 1e-5
+    BATCH_SIZE = 64
+    NUM_EPOCHS = 100
+    EARLY_STOPPING_PATIENCE = 10
+
+    # ==================== Evaluation ====================
+    EF_FRACTIONS = (0.01, 0.05, 0.1)
+    BEDROC_ALPHA = 20.0
+    TOP_K_FALSE_POSITIVES = 20

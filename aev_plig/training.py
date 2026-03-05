@@ -8,11 +8,12 @@ binding affinity prediction models.
 import time
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from pathlib import Path
 from torch.amp import autocast, GradScaler
 from torch_geometric.loader import DataLoader
-from aev_plig.config import Config
+from aev_plig.config import Config, RetrievalConfig
 from aev_plig.models import GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision
 from math import sqrt
 from scipy import stats
@@ -585,3 +586,161 @@ def train_model(
         wandb_run.summary['val_pearson_r'] = trainer.best_pc
 
     return output_dir
+
+
+# ==================== Retrieval / Ranking ====================
+
+def inbatch_contrastive_loss(protein_emb, ligand_emb, temperature=None):
+    """
+    CLIP-style in-batch contrastive loss for protein-ligand matching.
+
+    Every other complex in the batch is treated as a negative. The diagonal
+    of the B×B similarity matrix contains the positive (true) pairs.
+
+    Args:
+        protein_emb: Tensor [B, D] — protein-contribution embeddings
+        ligand_emb: Tensor [B, D] — ligand-contribution embeddings
+        temperature: Softmax temperature (default from RetrievalConfig)
+
+    Returns:
+        Scalar loss tensor.
+    """
+    if temperature is None:
+        temperature = RetrievalConfig.TEMPERATURE
+
+    protein_emb = F.normalize(protein_emb, dim=-1)
+    ligand_emb = F.normalize(ligand_emb, dim=-1)
+
+    scores = protein_emb @ ligand_emb.T / temperature  # [B, B]
+    targets = torch.arange(scores.size(0), device=scores.device)
+    return F.cross_entropy(scores, targets)
+
+
+class RetrievalTrainer:
+    """
+    Trainer for in-batch contrastive learning on protein-ligand complexes.
+
+    Uses GATv2NetRetrieval (dual projection heads) with CLIP-style loss.
+    Every other complex in the batch serves as a negative.
+    Validation runs full retrieval evaluation via evaluate_retrieval().
+
+    Args:
+        model: GATv2NetRetrieval model (dual embedding output)
+        train_loader: DataLoader (regular shuffled batching)
+        valid_data: list of PyG Data objects for validation
+        device: torch.device
+        lr: Learning rate
+        weight_decay: Weight decay
+        temperature: Contrastive loss temperature
+    """
+
+    def __init__(self, model, train_loader, valid_data, device,
+                 lr=None, weight_decay=None, temperature=None):
+        self.model = model
+        self.train_loader = train_loader
+        self.valid_data = valid_data
+        self.device = device
+        self.temperature = temperature if temperature is not None else RetrievalConfig.TEMPERATURE
+
+        if lr is None:
+            lr = RetrievalConfig.LEARNING_RATE
+        if weight_decay is None:
+            weight_decay = RetrievalConfig.WEIGHT_DECAY
+
+        self.optimizer = torch.optim.Adam(
+            model.parameters(), lr=lr, weight_decay=weight_decay
+        )
+
+        self.best_bedroc = -1.0
+
+    def train_epoch(self, epoch, log_interval=50):
+        """Train for one epoch. Returns average loss."""
+        self.model.train()
+        total_loss = 0.0
+        n_batches = 0
+
+        for batch_idx, data in enumerate(self.train_loader):
+            data = data.to(self.device, non_blocking=True)
+            self.optimizer.zero_grad()
+
+            protein_emb, ligand_emb = self.model(data)
+            loss = inbatch_contrastive_loss(protein_emb, ligand_emb, self.temperature)
+
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+            n_batches += 1
+
+            if batch_idx % log_interval == 0:
+                print(f'Train epoch {epoch} [{batch_idx}/{len(self.train_loader)}] '
+                      f'loss: {loss.item():.4f}')
+
+        avg_loss = total_loss / max(n_batches, 1)
+        print(f'Epoch {epoch} avg loss: {avg_loss:.4f}')
+        return avg_loss
+
+    def validate(self):
+        """
+        Run retrieval evaluation on validation data.
+
+        Returns:
+            pl.DataFrame with per-protein retrieval metrics
+        """
+        from aev_plig.prediction import evaluate_retrieval
+        return evaluate_retrieval(self.model, self.valid_data, self.device)
+
+    def fit(self, n_epochs, save_path, patience=None):
+        """
+        Train with early stopping on mean validation BEDROC.
+
+        Args:
+            n_epochs: Maximum number of epochs
+            save_path: Directory to save model checkpoint and config
+            patience: Early stopping patience (default from RetrievalConfig)
+
+        Returns:
+            float: Best validation BEDROC
+        """
+        import json
+
+        if patience is None:
+            patience = RetrievalConfig.EARLY_STOPPING_PATIENCE
+
+        save_path = Path(save_path)
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        self.model.to(self.device)
+        epochs_without_improvement = 0
+
+        for epoch in range(1, n_epochs + 1):
+            train_loss = self.train_epoch(epoch)
+
+            metrics_df = self.validate()
+            mean_bedroc = metrics_df['bedroc'].mean()
+            if mean_bedroc is None:
+                mean_bedroc = 0.0
+
+            print(f'Val BEDROC: {mean_bedroc:.4f} (best: {self.best_bedroc:.4f})')
+
+            if mean_bedroc > self.best_bedroc:
+                self.best_bedroc = mean_bedroc
+                torch.save(self.model.state_dict(), save_path / 'model.pt')
+                epochs_without_improvement = 0
+                print(f'Model saved! BEDROC: {mean_bedroc:.4f}')
+            else:
+                epochs_without_improvement += 1
+
+            if _wandb is not None and _wandb.run is not None:
+                _wandb.log({
+                    'epoch': epoch,
+                    'train_loss': train_loss,
+                    'val_bedroc': mean_bedroc,
+                })
+
+            if epochs_without_improvement >= patience:
+                print(f'Early stopping after {epoch} epochs (patience={patience})')
+                break
+
+            print('-' * 50)
+
+        return self.best_bedroc
