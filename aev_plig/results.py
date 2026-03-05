@@ -8,6 +8,8 @@ import numpy as np
 import polars as pl
 from scipy.stats import kendalltau, pearsonr, spearmanr, ttest_1samp
 
+from aev_plig.config import RetrievalConfig
+
 
 def load_predictions(path: str) -> pl.DataFrame:
     """Load an existing prediction parquet file.
@@ -372,3 +374,145 @@ def log_evaluation_to_wandb(run, df, model_cfg: dict, truth_col: str = "pK") -> 
 
     except Exception:
         pass
+
+
+# ==================== Retrieval Diagnostics ====================
+
+
+def analyze_false_positives(predictions_df, sdf_paths, top_k=None):
+    """
+    Analyze false positives from retrieval predictions.
+
+    For each protein target, identifies the top-k ligands ranked highest by
+    the model that are NOT among the top actives by actual ranking, then
+    computes RDKit molecular descriptors.
+
+    Args:
+        predictions_df: pl.DataFrame from predict_retrieval() with columns
+                        [protein, ligand, predicted_score, predicted_rank, actual_rank]
+        sdf_paths: dict mapping ligand ID → SDF file path
+        top_k: Number of top false positives to analyze per target
+               (default from RetrievalConfig)
+
+    Returns:
+        pl.DataFrame with columns:
+            protein, fp_ligand, predicted_rank, actual_rank,
+            tanimoto_to_best_active, mw, logp
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem, Descriptors, DataStructs
+
+    if top_k is None:
+        top_k = RetrievalConfig.TOP_K_FALSE_POSITIVES
+
+    results = []
+
+    for protein, group in predictions_df.group_by('protein'):
+        protein = protein[0] if isinstance(protein, tuple) else protein
+        group = group.sort('predicted_rank')
+        n = len(group)
+        if n < 4:
+            continue
+
+        # Top quartile by actual rank = actives
+        active_cutoff = max(1, n // 4)
+        actives = group.filter(pl.col('actual_rank') <= active_cutoff)
+        active_ids = set(actives['ligand'].to_list())
+
+        # Best active's fingerprint (lowest actual_rank)
+        best_active_id = actives.sort('actual_rank')['ligand'][0]
+        best_active_fp = None
+        if best_active_id in sdf_paths:
+            mol = Chem.SDMolSupplier(sdf_paths[best_active_id], removeHs=True)
+            if mol and mol[0] is not None:
+                best_active_fp = AllChem.GetMorganFingerprintAsBitVect(mol[0], 2, nBits=2048)
+
+        # False positives: high predicted rank but not actual actives
+        fp_count = 0
+        for row in group.iter_rows(named=True):
+            if fp_count >= top_k:
+                break
+            if row['ligand'] in active_ids:
+                continue
+
+            fp_count += 1
+            ligand_id = row['ligand']
+
+            tanimoto = None
+            mw = None
+            logp = None
+
+            if ligand_id in sdf_paths:
+                suppl = Chem.SDMolSupplier(sdf_paths[ligand_id], removeHs=True)
+                if suppl and suppl[0] is not None:
+                    fp_mol = suppl[0]
+                    mw = Descriptors.MolWt(fp_mol)
+                    logp = Descriptors.MolLogP(fp_mol)
+                    if best_active_fp is not None:
+                        fp_fp = AllChem.GetMorganFingerprintAsBitVect(fp_mol, 2, nBits=2048)
+                        tanimoto = DataStructs.TanimotoSimilarity(best_active_fp, fp_fp)
+
+            results.append({
+                'protein': protein,
+                'fp_ligand': ligand_id,
+                'predicted_rank': row['predicted_rank'],
+                'actual_rank': row['actual_rank'],
+                'tanimoto_to_best_active': tanimoto,
+                'mw': mw,
+                'logp': logp,
+            })
+
+    if not results:
+        return pl.DataFrame({
+            'protein': [], 'fp_ligand': [], 'predicted_rank': [],
+            'actual_rank': [], 'tanimoto_to_best_active': [],
+            'mw': [], 'logp': [],
+        })
+
+    return pl.DataFrame(results)
+
+
+def summarize_diagnostics(df):
+    """
+    Compute aggregated statistics from false positive analysis.
+
+    Args:
+        df: pl.DataFrame from analyze_false_positives()
+
+    Returns:
+        dict with keys: tanimoto_mean, tanimoto_median, frac_tanimoto_gt_0.5,
+        frac_tanimoto_gt_0.3, fp_mw_mean, fp_mw_std, fp_logp_mean,
+        fp_logp_std, rank_gap_mean
+    """
+    if df.height == 0:
+        return {}
+
+    tanimoto = df['tanimoto_to_best_active'].drop_nulls()
+    mw = df['mw'].drop_nulls()
+    logp = df['logp'].drop_nulls()
+
+    summary = {}
+
+    if tanimoto.len() > 0:
+        t_arr = tanimoto.to_numpy()
+        summary['tanimoto_mean'] = float(np.mean(t_arr))
+        summary['tanimoto_median'] = float(np.median(t_arr))
+        summary['frac_tanimoto_gt_0.5'] = float(np.mean(t_arr > 0.5))
+        summary['frac_tanimoto_gt_0.3'] = float(np.mean(t_arr > 0.3))
+
+    if mw.len() > 0:
+        mw_arr = mw.to_numpy()
+        summary['fp_mw_mean'] = float(np.mean(mw_arr))
+        summary['fp_mw_std'] = float(np.std(mw_arr))
+
+    if logp.len() > 0:
+        logp_arr = logp.to_numpy()
+        summary['fp_logp_mean'] = float(np.mean(logp_arr))
+        summary['fp_logp_std'] = float(np.std(logp_arr))
+
+    # Mean rank gap (how far off are the false positives)
+    rank_gap = (df['actual_rank'] - df['predicted_rank']).drop_nulls()
+    if rank_gap.len() > 0:
+        summary['rank_gap_mean'] = float(rank_gap.mean())
+
+    return summary

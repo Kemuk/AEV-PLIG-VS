@@ -12,7 +12,7 @@ import numpy as np
 from pathlib import Path
 from torch.amp import autocast, GradScaler
 from torch_geometric.loader import DataLoader
-from aev_plig.config import Config
+from aev_plig.config import Config, RetrievalConfig
 from aev_plig.models import GATv2NetMixedPrecision, GATv2NetBayesianMixedPrecision
 from math import sqrt
 from scipy import stats
@@ -585,3 +585,185 @@ def train_model(
         wandb_run.summary['val_pearson_r'] = trainer.best_pc
 
     return output_dir
+
+
+# ==================== Retrieval / Ranking ====================
+
+def pairwise_ranking_loss(scores, target_labels, affinities, margin=1.0):
+    """
+    Pairwise margin ranking loss over same-target complexes.
+
+    For all pairs (i, j) where target_i == target_j and pK_i > pK_j,
+    enforces score_i > score_j by at least `margin`.
+
+    Args:
+        scores: Tensor [N, 1] — model output (scalar score per complex)
+        target_labels: Tensor [N] — int-encoded target IDs
+        affinities: Tensor [N] — true pK values
+        margin: Ranking margin (default 1.0)
+
+    Returns:
+        Scalar loss tensor, or 0.0 tensor if no valid pairs exist.
+    """
+    scores = scores.squeeze(-1)  # [N]
+    device = scores.device
+
+    # Build mask of same-target pairs where pK_i > pK_j
+    same_target = target_labels.unsqueeze(0) == target_labels.unsqueeze(1)  # [N, N]
+    higher_affinity = affinities.unsqueeze(1) > affinities.unsqueeze(0)     # [N, N]
+    valid_pairs = same_target & higher_affinity  # [N, N]
+
+    idx_i, idx_j = torch.where(valid_pairs)
+    if len(idx_i) == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    loss_fn = nn.MarginRankingLoss(margin=margin)
+    target = torch.ones(len(idx_i), device=device)
+    return loss_fn(scores[idx_i], scores[idx_j], target)
+
+
+class RetrievalTrainer:
+    """
+    Trainer for pairwise ranking loss on protein-ligand complexes.
+
+    Uses TargetAwareBatchSampler to ensure each batch contains
+    multiple complexes per target for forming ranking pairs.
+    Validation runs full retrieval evaluation via evaluate_retrieval().
+
+    Args:
+        model: GATv2Net model (scalar output)
+        train_loader: DataLoader with TargetAwareBatchSampler
+        valid_data: list of PyG Data objects for validation
+        device: torch.device
+        lr: Learning rate
+        weight_decay: Weight decay
+        margin: Margin for pairwise ranking loss
+    """
+
+    def __init__(self, model, train_loader, valid_data, device,
+                 lr=None, weight_decay=None, margin=None):
+        self.model = model
+        self.train_loader = train_loader
+        self.valid_data = valid_data
+        self.device = device
+        self.margin = margin if margin is not None else RetrievalConfig.MARGIN
+
+        if lr is None:
+            lr = RetrievalConfig.LEARNING_RATE
+        if weight_decay is None:
+            weight_decay = RetrievalConfig.WEIGHT_DECAY
+
+        self.optimizer = torch.optim.Adam(
+            model.parameters(), lr=lr, weight_decay=weight_decay
+        )
+
+        self.best_bedroc = -1.0
+
+    def _encode_target_labels(self, batch):
+        """Extract target labels and affinities from a PyG Batch object."""
+        # unique_id is the target label (e.g., PDB code)
+        labels = batch.unique_id
+        # Map string labels to ints for the batch
+        unique = list(set(labels))
+        label_to_int = {l: i for i, l in enumerate(unique)}
+        target_ids = torch.tensor(
+            [label_to_int[l] for l in labels],
+            device=self.device
+        )
+        affinities = torch.tensor(
+            [batch[i].pK for i in range(len(labels))],
+            dtype=torch.float32,
+            device=self.device
+        )
+        return target_ids, affinities
+
+    def train_epoch(self, epoch, log_interval=50):
+        """Train for one epoch. Returns average loss."""
+        self.model.train()
+        total_loss = 0.0
+        n_batches = 0
+
+        for batch_idx, data in enumerate(self.train_loader):
+            data = data.to(self.device, non_blocking=True)
+            self.optimizer.zero_grad()
+
+            scores = self.model(data)
+            target_ids, affinities = self._encode_target_labels(data)
+            loss = pairwise_ranking_loss(scores, target_ids, affinities, self.margin)
+
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+            n_batches += 1
+
+            if batch_idx % log_interval == 0:
+                print(f'Train epoch {epoch} [{batch_idx}/{len(self.train_loader)}] '
+                      f'loss: {loss.item():.4f}')
+
+        avg_loss = total_loss / max(n_batches, 1)
+        print(f'Epoch {epoch} avg loss: {avg_loss:.4f}')
+        return avg_loss
+
+    def validate(self):
+        """
+        Run retrieval evaluation on validation data.
+
+        Returns:
+            pl.DataFrame with per-protein retrieval metrics
+        """
+        from aev_plig.prediction import evaluate_retrieval
+        return evaluate_retrieval(self.model, self.valid_data, self.device)
+
+    def fit(self, n_epochs, save_path, patience=None):
+        """
+        Train with early stopping on mean validation BEDROC.
+
+        Args:
+            n_epochs: Maximum number of epochs
+            save_path: Directory to save model checkpoint and config
+            patience: Early stopping patience (default from RetrievalConfig)
+
+        Returns:
+            float: Best validation BEDROC
+        """
+        import json
+
+        if patience is None:
+            patience = RetrievalConfig.EARLY_STOPPING_PATIENCE
+
+        save_path = Path(save_path)
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        self.model.to(self.device)
+        epochs_without_improvement = 0
+
+        for epoch in range(1, n_epochs + 1):
+            train_loss = self.train_epoch(epoch)
+
+            metrics_df = self.validate()
+            mean_bedroc = metrics_df['bedroc'].mean()
+
+            print(f'Val BEDROC: {mean_bedroc:.4f} (best: {self.best_bedroc:.4f})')
+
+            if mean_bedroc > self.best_bedroc:
+                self.best_bedroc = mean_bedroc
+                torch.save(self.model.state_dict(), save_path / 'model.pt')
+                epochs_without_improvement = 0
+                print(f'Model saved! BEDROC: {mean_bedroc:.4f}')
+            else:
+                epochs_without_improvement += 1
+
+            if _wandb is not None and _wandb.run is not None:
+                _wandb.log({
+                    'epoch': epoch,
+                    'train_loss': train_loss,
+                    'val_bedroc': mean_bedroc,
+                })
+
+            if epochs_without_improvement >= patience:
+                print(f'Early stopping after {epoch} epochs (patience={patience})')
+                break
+
+            print('-' * 50)
+
+        return self.best_bedroc

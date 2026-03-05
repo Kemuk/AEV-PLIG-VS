@@ -22,7 +22,7 @@ from torch.amp import autocast
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-from aev_plig.config import Config
+from aev_plig.config import Config, RetrievalConfig
 from aev_plig.graphs import create_graph
 from aev_plig.loaders import compute_aevs, load_ligand_atoms, load_protein_atoms_biopandas
 from aev_plig.models import GATv2NetBayesianMixedPrecision, GATv2NetMixedPrecision, MODEL_REGISTRY
@@ -642,3 +642,169 @@ def save_results(df, config, total_time, graph_time=None):
         print(f"Graph generation time: {graph_time:.2f} seconds")
     print(f"Total pipeline time: {total_time:.2f} seconds")
     print("="*60 + "\n")
+
+
+# ==================== Retrieval / Virtual Screening ====================
+
+
+def predict_retrieval(model, data, device):
+    """
+    Score all complexes and rank ligands within each protein target.
+
+    Args:
+        model: GATv2Net model (scalar output) in eval mode
+        data: list of PyG Data objects, each with .unique_id and .pK attributes
+        device: torch.device
+
+    Returns:
+        pl.DataFrame with columns:
+            protein  — target identifier (unique_id)
+            ligand   — complex identifier (unique_id)
+            predicted_score — raw model scalar output
+            predicted_rank  — rank by predicted_score within protein (1 = highest)
+            actual_rank     — rank by true pK within protein (1 = highest)
+    """
+    model.eval()
+    loader = DataLoader(data, batch_size=128, shuffle=False)
+
+    scores = []
+    unique_ids = []
+    pks = []
+
+    with torch.no_grad():
+        for batch in loader:
+            batch = batch.to(device, non_blocking=True)
+            output = model(batch)
+            if isinstance(output, tuple):
+                output = output[0]
+            scores.extend(output.cpu().squeeze(-1).tolist())
+            unique_ids.extend(batch.unique_id)
+            pks.extend([batch[i].pK for i in range(len(batch.unique_id))])
+
+    df = pl.DataFrame({
+        'protein': unique_ids,
+        'ligand': unique_ids,
+        'predicted_score': scores,
+        'pK': pks,
+    })
+
+    # Rank within each protein target
+    df = df.with_columns([
+        pl.col('predicted_score')
+          .rank(method='ordinal', descending=True)
+          .over('protein')
+          .alias('predicted_rank'),
+        pl.col('pK')
+          .rank(method='ordinal', descending=True)
+          .over('protein')
+          .alias('actual_rank'),
+    ])
+
+    return df.select(['protein', 'ligand', 'predicted_score', 'predicted_rank', 'actual_rank'])
+
+
+def format_retrieval_scores(scores, is_active):
+    """
+    Format scores for rdkit.ML.Scoring.Scoring functions.
+
+    Args:
+        scores: array-like [N] — predicted scores (will be sorted descending)
+        is_active: array-like [N] — 1 if active, 0 otherwise
+
+    Returns:
+        list[list[float, int]] — sorted by score descending,
+        each row [score, active_flag]. Required format for CalcEnrichment,
+        CalcBEDROC, CalcRIE.
+    """
+    scores = np.asarray(scores)
+    is_active = np.asarray(is_active, dtype=int)
+
+    order = np.argsort(-scores)
+    return [[float(scores[i]), int(is_active[i])] for i in order]
+
+
+def evaluate_retrieval(model, data, device,
+                       fractions=None, bedroc_alpha=None,
+                       active_threshold=None):
+    """
+    Evaluate retrieval performance per protein target.
+
+    Scores all complexes, ranks within each protein target, then computes
+    enrichment metrics using rdkit.ML.Scoring.Scoring.
+
+    Args:
+        model: GATv2Net model (scalar output)
+        data: list of PyG Data objects with .unique_id and .pK
+        device: torch.device
+        fractions: tuple of fractions for CalcEnrichment (default from RetrievalConfig)
+        bedroc_alpha: alpha parameter for CalcBEDROC (default from RetrievalConfig)
+        active_threshold: pK cutoff to define "active". If None, top quartile per target.
+
+    Returns:
+        pl.DataFrame with columns:
+            protein, n_ligands, n_actives,
+            ef_1pct, ef_5pct, ef_10pct, bedroc, rie
+    """
+    from rdkit.ML.Scoring.Scoring import CalcEnrichment, CalcBEDROC, CalcRIE
+
+    if fractions is None:
+        fractions = RetrievalConfig.EF_FRACTIONS
+    if bedroc_alpha is None:
+        bedroc_alpha = RetrievalConfig.BEDROC_ALPHA
+
+    predictions_df = predict_retrieval(model, data, device)
+
+    results = []
+    for protein, group in predictions_df.group_by('protein'):
+        protein = protein[0] if isinstance(protein, tuple) else protein
+        group = group.sort('predicted_rank')
+
+        pks = group['pK'].to_numpy() if 'pK' in group.columns else None
+        if pks is None:
+            # Need pK from original data
+            continue
+
+        n_ligands = len(group)
+        if n_ligands < 2:
+            continue
+
+        # Define actives
+        if active_threshold is not None:
+            is_active = (pks >= active_threshold).astype(int)
+        else:
+            # Top quartile within this target
+            threshold = np.percentile(pks, 75)
+            is_active = (pks >= threshold).astype(int)
+
+        n_actives = int(is_active.sum())
+        if n_actives == 0 or n_actives == n_ligands:
+            continue
+
+        scores_list = format_retrieval_scores(
+            group['predicted_score'].to_numpy(), is_active
+        )
+
+        efs = CalcEnrichment(scores_list, 1, list(fractions))
+        bedroc = CalcBEDROC(scores_list, 1, bedroc_alpha)
+        rie = CalcRIE(scores_list, 1, bedroc_alpha)
+
+        row = {
+            'protein': protein,
+            'n_ligands': n_ligands,
+            'n_actives': n_actives,
+            'bedroc': bedroc,
+            'rie': rie,
+        }
+        for frac, ef in zip(fractions, efs):
+            row[f'ef_{int(frac*100)}pct'] = ef
+
+        results.append(row)
+
+    if not results:
+        return pl.DataFrame({
+            'protein': [], 'n_ligands': [], 'n_actives': [],
+            'bedroc': [], 'rie': [],
+            **{f'ef_{int(f*100)}pct': [] for f in fractions},
+        })
+
+    return pl.DataFrame(results)

@@ -3,13 +3,15 @@ PyTorch Geometric dataset utilities for protein-ligand graphs.
 """
 
 import json
+import math
 import warnings
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import ConcatDataset
+from torch.utils.data import ConcatDataset, Sampler
 from torch_geometric.data import Data
 from tqdm import tqdm
 
@@ -123,3 +125,91 @@ def load_split(dataset_name, split):
         f"No dataset artifacts found for split '{split}'. "
         f"Checked {manifest_path} and {legacy_path}."
     )
+
+
+def get_target_labels(dataset):
+    """
+    Extract target labels from a dataset of PyG Data objects.
+
+    Args:
+        dataset: Iterable of PyG Data objects, each with a `.unique_id` attribute
+                 (e.g. "3ao4").
+
+    Returns:
+        list[str]: Target label per complex.
+    """
+    return [data.unique_id for data in dataset]
+
+
+class TargetAwareBatchSampler(Sampler):
+    """
+    Batch sampler that guarantees each batch contains multiple complexes per
+    target, enabling pairwise ranking loss computation within each batch.
+
+    Groups dataset indices by target label, then builds batches by sampling
+    `complexes_per_target` indices from each of several targets until the
+    batch is full. Targets with fewer than 2 complexes are excluded.
+
+    Args:
+        target_labels: One target label per dataset element.
+        complexes_per_target: Number of complexes to sample per target in each batch.
+        batch_size: Maximum batch size (will be rounded down to a multiple of
+                    complexes_per_target).
+        seed: Random seed for reproducibility.
+    """
+
+    def __init__(self, target_labels, complexes_per_target=4, batch_size=64, seed=42):
+        self.complexes_per_target = complexes_per_target
+        self.seed = seed
+
+        # Group indices by target, keep only targets with ≥2 complexes
+        target_to_indices = defaultdict(list)
+        for idx, label in enumerate(target_labels):
+            target_to_indices[label].append(idx)
+        self.target_to_indices = {
+            t: idxs for t, idxs in target_to_indices.items() if len(idxs) >= 2
+        }
+        self.targets = list(self.target_to_indices.keys())
+
+        # How many targets fit in one batch
+        self.targets_per_batch = max(1, batch_size // complexes_per_target)
+        self.total = sum(len(v) for v in self.target_to_indices.values())
+
+    def __iter__(self):
+        rng = np.random.RandomState(self.seed)
+
+        # Shuffle targets, cycle through them building batches
+        targets = self.targets.copy()
+        rng.shuffle(targets)
+
+        # For each target, create a shuffled pool of indices
+        pools = {}
+        for t in targets:
+            idxs = self.target_to_indices[t].copy()
+            rng.shuffle(idxs)
+            pools[t] = idxs
+
+        target_idx = 0
+        while target_idx < len(targets):
+            batch = []
+            batch_targets = targets[target_idx:target_idx + self.targets_per_batch]
+            for t in batch_targets:
+                pool = pools[t]
+                n = min(self.complexes_per_target, len(pool))
+                if n < 2:
+                    continue
+                # Sample without replacement from this target's pool
+                sampled = pool[:n]
+                pool[:n] = []  # remove used indices
+                # Refill pool if exhausted
+                if len(pool) < 2:
+                    refill = self.target_to_indices[t].copy()
+                    rng.shuffle(refill)
+                    pools[t] = refill
+                batch.extend(sampled)
+            if batch:
+                yield batch
+            target_idx += self.targets_per_batch
+
+    def __len__(self):
+        return math.ceil(len(self.targets) / self.targets_per_batch)
