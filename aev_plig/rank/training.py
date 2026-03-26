@@ -9,20 +9,26 @@ from .negatives import RandomNegativeGenerator
 
 def train_rank(
     sources: list[str] = ("pdbbind", "bindingnet"),
+    pool_sources: list[str] | None = None,
     data_dir: str = "data",
     featuriser: LigandFeaturiser | None = None,
     config: RankConfig | None = None,
     output_dir: str | Path | None = None,
+    n_jobs: int = -1,
 ) -> tuple[LambdaMARTModel, RankDataset]:
     cfg = config or RankConfig()
     feat = featuriser or ECFP4Featuriser(cfg.ECFP4_RADIUS, cfg.ECFP4_NBITS)
 
-    df = load_records(sources, data_dir)
-    dataset = RankDataset(df, feat, RandomNegativeGenerator(cfg.N_NEGATIVES), cfg.NEGATIVE_SEED)
+    actives_df = load_records(sources, data_dir)
+    pool_df = load_records(pool_sources, data_dir) if pool_sources else None
+
+    dataset = RankDataset(actives_df, feat, RandomNegativeGenerator(cfg.N_NEGATIVES),
+                          cfg.NEGATIVE_SEED, pool_df=pool_df, n_jobs=n_jobs)
     dataset.prepare()
 
     X_tr, y_tr, g_tr = dataset.get_arrays("train")
-    X_va, y_va, g_va = dataset.get_arrays("valid")
+    val = dataset._data.get("valid")
+    X_va, y_va, g_va = (val[0], val[1], val[2]) if val is not None else (None, None, None)
 
     model = LambdaMARTModel(cfg)
     model.fit(X_tr, y_tr, g_tr, X_va, y_va, g_va)

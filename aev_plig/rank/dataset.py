@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import polars as pl
 from rdkit import Chem
@@ -11,11 +14,26 @@ TANIMOTO_MAX = 0.9  # mirror existing pipeline filter
 
 
 def _read_mol(path: str):
-    """Read SDF or MOL2 via RDKit; return None on failure."""
     if path.endswith(".mol2"):
         return Chem.MolFromMol2File(path, sanitize=True)
     suppl = Chem.SDMolSupplier(path, sanitize=True, removeHs=False)
     return next(iter(suppl), None)
+
+
+def _read_and_featurise(args: tuple) -> tuple[str, np.ndarray | None]:
+    uid, mol_path, protein_path, featuriser = args
+    mol = _read_mol(mol_path)
+    return uid, (featuriser.featurise(mol, protein_path) if mol is not None else None)
+
+
+def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
+                  n_jobs: int = -1) -> dict[str, np.ndarray]:
+    """Read and featurise all rows in parallel. Returns {unique_id: fingerprint}."""
+    n_workers = os.cpu_count() if n_jobs < 1 else n_jobs
+    tasks = [(r["unique_id"], r["mol_path"], r["protein_path"], featuriser)
+             for r in df.select(["unique_id", "mol_path", "protein_path"]).iter_rows(named=True)]
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        return {uid: fp for uid, fp in ex.map(_read_and_featurise, tasks) if fp is not None}
 
 
 def load_records(
@@ -85,39 +103,53 @@ class RankDataset:
     """
     Loads actives, samples negatives per query, computes fingerprints.
     Call prepare() once before get_arrays().
+
+    pool_df: optional separate DataFrame for negatives. If None, actives are used as pool.
+    n_jobs:  parallelism for mol reading + featurisation (-1 = all CPUs).
     """
 
-    def __init__(self, df: pl.DataFrame, featuriser: LigandFeaturiser,
-                 neg_gen: NegativeGenerator, seed: int = 42):
-        self._df = df
+    def __init__(self, actives_df: pl.DataFrame, featuriser: LigandFeaturiser,
+                 neg_gen: NegativeGenerator, seed: int = 42,
+                 pool_df: pl.DataFrame | None = None, n_jobs: int = -1):
+        self._actives_df = actives_df
         self._featuriser = featuriser
         self._neg_gen = neg_gen
         self._seed = seed
+        self._pool_df = pool_df
+        self._n_jobs = n_jobs
         self._data: dict = {}  # split -> (X, y, group_sizes, target_ids)
 
     def prepare(self) -> None:
         rng = np.random.default_rng(self._seed)
-        fps = {row["unique_id"]: self._featuriser.featurise(mol, row["protein_path"])
-               for row in self._df.iter_rows(named=True)
-               if (mol := _read_mol(row["mol_path"])) is not None}
-        valid = self._df.filter(pl.col("unique_id").is_in(list(fps)))
-        for split in valid["split"].unique():
-            split_df = valid.filter(pl.col("split") == split)
-            groups = [g for row in split_df.iter_rows(named=True)
-                      if (g := self._make_group(row, split_df, fps, rng))]
-            if groups:
-                Xs, ys, sizes, tids = zip(*groups)
-                self._data[split] = np.vstack(Xs), np.concatenate(ys), np.array(sizes), list(tids)
+        pool = self._pool_df if self._pool_df is not None else self._actives_df
 
-    def _make_group(self, row, split_df, fps, rng):
-        negs = [r["unique_id"] for r in
-                self._neg_gen.generate(row["target_id"], split_df, rng).iter_rows(named=True)
-                if r["unique_id"] in fps]
-        if not negs:
-            return None
-        return (np.vstack([fps[row["unique_id"]]] + [fps[n] for n in negs]),
-                np.array([1] + [0] * len(negs), dtype=np.uint8),
-                1 + len(negs), row["target_id"])
+        # Parallel featurisation of all unique mols (actives + pool)
+        fps = _featurise_df(
+            pl.concat([self._actives_df, pool]).unique("unique_id"),
+            self._featuriser, self._n_jobs,
+        )
+
+        # Pre-build pool arrays once — O(1) lookup in inner loop
+        pool_valid   = pool.filter(pl.col("unique_id").is_in(list(fps)))
+        pool_uids    = pool_valid["unique_id"].to_list()
+        pool_matrix  = np.vstack([fps[u] for u in pool_uids])       # (P, D)
+        pool_targets = np.array(pool_valid["target_id"].to_list())   # (P,)
+
+        for split in self._actives_df["split"].unique():
+            actives = self._actives_df.filter(
+                (pl.col("split") == split) & pl.col("unique_id").is_in(list(fps))
+            )
+            Xs, ys, sizes, tids = [], [], [], []
+            for row in actives.iter_rows(named=True):
+                idxs = self._neg_gen.sample_indices(row["target_id"], pool_targets, rng)
+                if len(idxs) == 0:
+                    continue
+                Xs.append(np.vstack([fps[row["unique_id"]], pool_matrix[idxs]]))
+                ys.append(np.array([1] + [0] * len(idxs), dtype=np.uint8))
+                sizes.append(1 + len(idxs))
+                tids.append(row["target_id"])
+            if Xs:
+                self._data[split] = np.vstack(Xs), np.concatenate(ys), np.array(sizes), tids
 
     def get_arrays(self, split: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return X, y, group_sizes for LightGBM."""
