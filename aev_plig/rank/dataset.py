@@ -5,8 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import polars as pl
-from rdkit import Chem
+from rdkit import Chem, RDLogger
 from tqdm import tqdm
+
+RDLogger.DisableLog("rdApp.*")
 
 from .featurisers import LigandFeaturiser
 from .negatives import NegativeGenerator
