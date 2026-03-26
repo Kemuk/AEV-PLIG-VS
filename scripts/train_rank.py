@@ -20,6 +20,8 @@ def parse_args():
     p.add_argument("--num-leaves",   type=int,   default=RankConfig.NUM_LEAVES)
     p.add_argument("--n-jobs",       type=int,   default=-1,
                    help="Parallel workers for featurisation (-1 = all CPUs)")
+    p.add_argument("--cache-dir",    default=None,
+                   help="Directory to cache fingerprints (skip if absent)")
     p.add_argument("--output-dir",   default=RankConfig.RANK_MODELS_DIR)
     return p.parse_args()
 
@@ -45,6 +47,7 @@ def main():
         config=cfg,
         output_dir=args.output_dir,
         n_jobs=args.n_jobs,
+        cache_dir=args.cache_dir,
     )
 
     print("\n=== Test enrichment ===")

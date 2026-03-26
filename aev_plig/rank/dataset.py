@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import os
-from concurrent.futures import ThreadPoolExecutor
+import pickle
+from pathlib import Path
 
 import numpy as np
 import polars as pl
 from rdkit import Chem, RDLogger
 from tqdm import tqdm
+from tqdm.contrib.concurrent import thread_map
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -30,16 +33,32 @@ def _read_and_featurise(args: tuple) -> tuple[str, np.ndarray | None]:
 
 
 def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
-                  n_jobs: int = -1) -> dict[str, np.ndarray]:
+                  n_jobs: int = -1, cache_dir: str | None = None) -> dict[str, np.ndarray]:
     """Read and featurise all rows in parallel. Returns {unique_id: fingerprint}."""
     n_workers = os.cpu_count() if n_jobs < 1 else n_jobs
     tasks = [(r["unique_id"], r["mol_path"], r["protein_path"], featuriser)
              for r in df.select(["unique_id", "mol_path", "protein_path"]).iter_rows(named=True)]
+
+    if cache_dir is not None:
+        h = hashlib.md5(str(sorted(t[1] for t in tasks)).encode()).hexdigest()
+        cache_file = Path(cache_dir) / f"fps_{h}.pkl"
+        if cache_file.exists():
+            print(f"  Loading {len(tasks)} fingerprints from cache ({cache_file.name})...")
+            with open(cache_file, "rb") as f:
+                return pickle.load(f)
+
     print(f"  Featurising {len(tasks)} molecules ({n_workers} workers)...")
-    with ThreadPoolExecutor(max_workers=n_workers) as ex:
-        results = tqdm(ex.map(_read_and_featurise, tasks), total=len(tasks),
-                       desc="  featurise", unit="mol", leave=False)
-        return {uid: fp for uid, fp in results if fp is not None}
+    results = thread_map(_read_and_featurise, tasks, max_workers=n_workers,
+                         desc="  featurise", unit="mol")
+    fps = {uid: fp for uid, fp in results if fp is not None}
+
+    if cache_dir is not None:
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        with open(cache_file, "wb") as f:
+            pickle.dump(fps, f)
+        print(f"  Fingerprints cached to {cache_file.name}")
+
+    return fps
 
 
 def load_records(
@@ -116,13 +135,15 @@ class RankDataset:
 
     def __init__(self, actives_df: pl.DataFrame, featuriser: LigandFeaturiser,
                  neg_gen: NegativeGenerator, seed: int = 42,
-                 pool_df: pl.DataFrame | None = None, n_jobs: int = -1):
+                 pool_df: pl.DataFrame | None = None, n_jobs: int = -1,
+                 cache_dir: str | None = None):
         self._actives_df = actives_df
         self._featuriser = featuriser
         self._neg_gen = neg_gen
         self._seed = seed
         self._pool_df = pool_df
         self._n_jobs = n_jobs
+        self._cache_dir = cache_dir
         self._data: dict = {}  # split -> (X, y, group_sizes, target_ids)
 
     def prepare(self) -> None:
@@ -132,7 +153,7 @@ class RankDataset:
         # Parallel featurisation of all unique mols (actives + pool)
         fps = _featurise_df(
             pl.concat([self._actives_df, pool]).unique("unique_id"),
-            self._featuriser, self._n_jobs,
+            self._featuriser, self._n_jobs, self._cache_dir,
         )
 
         # Pre-build pool arrays once — O(1) lookup in inner loop

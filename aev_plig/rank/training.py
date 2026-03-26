@@ -15,6 +15,7 @@ def train_rank(
     config: RankConfig | None = None,
     output_dir: str | Path | None = None,
     n_jobs: int = -1,
+    cache_dir: str | None = None,
 ) -> tuple[LambdaMARTModel, RankDataset]:
     cfg = config or RankConfig()
     feat = featuriser or ECFP4Featuriser(cfg.ECFP4_RADIUS, cfg.ECFP4_NBITS)
@@ -26,7 +27,7 @@ def train_rank(
 
     print("[2/4] Preparing dataset...")
     dataset = RankDataset(actives_df, feat, RandomNegativeGenerator(cfg.N_NEGATIVES),
-                          cfg.NEGATIVE_SEED, pool_df=pool_df, n_jobs=n_jobs)
+                          cfg.NEGATIVE_SEED, pool_df=pool_df, n_jobs=n_jobs, cache_dir=cache_dir)
     dataset.prepare()
 
     X_tr, y_tr, g_tr = dataset.get_arrays("train")
