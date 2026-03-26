@@ -20,7 +20,7 @@ class LambdaMARTModel:
             min_child_samples=self._cfg.MIN_CHILD_SAMPLES,
             learning_rate=self._cfg.LEARNING_RATE,
             n_estimators=self._cfg.N_ESTIMATORS,
-            verbose=-1,
+            verbose=50,
         )
         train_ds = lgb.Dataset(X_train, label=y_train, group=groups_train)
         valid_sets = ([lgb.Dataset(X_val, label=y_val, group=groups_val)]

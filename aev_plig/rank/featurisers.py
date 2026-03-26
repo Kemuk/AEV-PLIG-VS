@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 import numpy as np
-from rdkit.Chem import AllChem
+from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
 
 class LigandFeaturiser(ABC):
@@ -16,7 +16,7 @@ class LigandFeaturiser(ABC):
 
 class ECFP4Featuriser(LigandFeaturiser):
     def __init__(self, radius: int = 2, n_bits: int = 2048):
-        self.radius, self.n_bits = radius, n_bits
+        self._gen = GetMorganGenerator(radius=radius, fpSize=n_bits)
 
     def featurise(self, mol, protein_path=None) -> np.ndarray:
-        return np.array(AllChem.GetMorganFingerprintAsBitVect(mol, self.radius, self.n_bits))
+        return self._gen.GetFingerprintAsNumPy(mol)

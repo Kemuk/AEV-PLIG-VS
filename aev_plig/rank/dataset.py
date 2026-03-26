@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import polars as pl
 from rdkit import Chem
+from tqdm import tqdm
 
 from .featurisers import LigandFeaturiser
 from .negatives import NegativeGenerator
@@ -32,8 +33,11 @@ def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
     n_workers = os.cpu_count() if n_jobs < 1 else n_jobs
     tasks = [(r["unique_id"], r["mol_path"], r["protein_path"], featuriser)
              for r in df.select(["unique_id", "mol_path", "protein_path"]).iter_rows(named=True)]
+    print(f"  Featurising {len(tasks)} molecules ({n_workers} workers)...")
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
-        return {uid: fp for uid, fp in ex.map(_read_and_featurise, tasks) if fp is not None}
+        results = tqdm(ex.map(_read_and_featurise, tasks), total=len(tasks),
+                       desc="  featurise", unit="mol", leave=False)
+        return {uid: fp for uid, fp in results if fp is not None}
 
 
 def load_records(
@@ -139,15 +143,24 @@ class RankDataset:
             actives = self._actives_df.filter(
                 (pl.col("split") == split) & pl.col("unique_id").is_in(list(fps))
             )
+            act_uids    = actives["unique_id"].to_list()
+            act_targets = actives["target_id"].to_list()
+            act_matrix  = np.vstack([fps[u] for u in act_uids])          # (A, D)
+            eligible_cache = {t: np.where(pool_targets != t)[0]
+                              for t in np.unique(act_targets)}            # K calls, not N
+            print(f"  Building {split} queries ({len(act_uids)} actives, "
+                  f"{len(eligible_cache)} unique targets)...")
             Xs, ys, sizes, tids = [], [], [], []
-            for row in actives.iter_rows(named=True):
-                idxs = self._neg_gen.sample_indices(row["target_id"], pool_targets, rng)
+            for i, (uid, tid) in enumerate(tqdm(
+                    zip(act_uids, act_targets), total=len(act_uids),
+                    desc=f"  {split}", unit="query", leave=False)):
+                idxs = self._neg_gen.sample(eligible_cache[tid], rng)
                 if len(idxs) == 0:
                     continue
-                Xs.append(np.vstack([fps[row["unique_id"]], pool_matrix[idxs]]))
+                Xs.append(np.vstack([act_matrix[i:i+1], pool_matrix[idxs]]))
                 ys.append(np.array([1] + [0] * len(idxs), dtype=np.uint8))
                 sizes.append(1 + len(idxs))
-                tids.append(row["target_id"])
+                tids.append(tid)
             if Xs:
                 self._data[split] = np.vstack(Xs), np.concatenate(ys), np.array(sizes), tids
 
