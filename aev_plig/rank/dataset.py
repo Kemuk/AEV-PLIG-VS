@@ -28,11 +28,12 @@ def _read_molecule(file_path: str):
 
 
 def _read_and_compute_features(args: tuple) -> tuple[str, np.ndarray | None]:
-    record_id, mol_path, protein_path, featuriser = args
+    uid, mol_path, protein_path, featuriser = args
+    if not os.path.exists(mol_path):
+        return uid, None
     mol = _read_molecule(mol_path)
-    if mol is None:
-        return record_id, None
-    return record_id, featuriser.featurise(mol, protein_path)
+    print(mol)
+    return uid, (featuriser.featurise(mol, protein_path) if mol is not None else None)
 
 
 def _compute_fingerprints_for_df(
@@ -50,6 +51,8 @@ def _compute_fingerprints_for_df(
             ["unique_id", "mol_path", "protein_path"]
         ).iter_rows(named=True)
     ]
+
+    print(f"  First 3 paths: {[t[1] for t in featurisation_tasks[:3]]}", flush=True)
 
     if cache_dir is not None:
         cache_hash = hashlib.md5(
@@ -137,7 +140,7 @@ def load_records(
                 "unique_id": records_df["unique_identify"],
                 "target_id": target_ids,
                 "mol_path": [
-                    f"{bindingnet_root}/{p}/target_{t}/{c}/rec_addcharge_pocket_6A.mol2"
+                    f"{bindingnet_root}/{p}/target_{t}/{c}/*.sdf"
                     for p, t, c in zip(pdb_codes, target_ids, compound_ids)
                 ],
                 "protein_path": [
