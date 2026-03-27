@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 from rdkit import Chem, RDLogger
+import sys
+
 from tqdm import tqdm
 
 RDLogger.DisableLog("rdApp.*")
@@ -51,7 +53,7 @@ def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
         futures = [ex.submit(_read_and_featurise, t) for t in tasks]
         results = [f.result() for f in tqdm(as_completed(futures), total=len(tasks),
-                                            desc="  featurise", unit="mol")]
+                                            desc="  featurise", unit="mol", file=sys.stdout)]
     fps = {uid: fp for uid, fp in results if fp is not None}
 
     if cache_dir is not None:
@@ -180,7 +182,7 @@ class RankDataset:
             Xs, ys, sizes, tids = [], [], [], []
             for i, (uid, tid) in enumerate(tqdm(
                     zip(act_uids, act_targets), total=len(act_uids),
-                    desc=f"  {split}", unit="query", leave=False)):
+                    desc=f"  {split}", unit="query", leave=False, file=sys.stdout)):
                 idxs = self._neg_gen.sample(eligible_cache[tid], rng)
                 if len(idxs) == 0:
                     continue
