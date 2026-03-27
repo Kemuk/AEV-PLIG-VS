@@ -37,6 +37,7 @@ def _read_and_featurise(args: tuple) -> tuple[str, np.ndarray | None]:
 def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
                   n_jobs: int = -1, cache_dir: str | None = None) -> dict[str, np.ndarray]:
     """Read and featurise all rows in parallel. Returns {unique_id: fingerprint}."""
+    
     n_workers = os.cpu_count() if n_jobs < 1 else n_jobs
     tasks = [(r["unique_id"], r["mol_path"], r["protein_path"], featuriser)
              for r in df.select(["unique_id", "mol_path", "protein_path"]).iter_rows(named=True)]
@@ -50,8 +51,8 @@ def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
                 return pickle.load(f)
 
     print(f"  Featurising {len(tasks)} molecules ({n_workers} workers)...")
-    results = thread_map(_read_and_featurise, tasks, max_workers=n_workers,
-                         desc="  featurise", unit="mol", file=sys.stdout)
+    results = thread_map(_read_and_featurise, tasks, total=len(tasks), max_workers=n_workers,
+                         desc="  featurise", unit="mol")
     fps = {uid: fp for uid, fp in results if fp is not None}
 
     if cache_dir is not None:
