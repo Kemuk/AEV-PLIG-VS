@@ -3,13 +3,13 @@ from __future__ import annotations
 import hashlib
 import os
 import pickle
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 from rdkit import Chem, RDLogger
 from tqdm import tqdm
-from tqdm.contrib.concurrent import thread_map
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -48,8 +48,10 @@ def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
                 return pickle.load(f)
 
     print(f"  Featurising {len(tasks)} molecules ({n_workers} workers)...")
-    results = thread_map(_read_and_featurise, tasks, max_workers=n_workers,
-                         desc="  featurise", unit="mol")
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        futures = [ex.submit(_read_and_featurise, t) for t in tasks]
+        results = [f.result() for f in tqdm(as_completed(futures), total=len(tasks),
+                                            desc="  featurise", unit="mol")]
     fps = {uid: fp for uid, fp in results if fp is not None}
 
     if cache_dir is not None:
@@ -156,23 +158,25 @@ class RankDataset:
             self._featuriser, self._n_jobs, self._cache_dir,
         )
 
-        # Pre-build pool arrays once — O(1) lookup in inner loop
-        pool_valid   = pool.filter(pl.col("unique_id").is_in(list(fps)))
-        pool_uids    = pool_valid["unique_id"].to_list()
-        pool_matrix  = np.vstack([fps[u] for u in pool_uids])       # (P, D)
-        pool_targets = np.array(pool_valid["target_id"].to_list())   # (P,)
-
         for split in self._actives_df["split"].unique():
             actives = self._actives_df.filter(
                 (pl.col("split") == split) & pl.col("unique_id").is_in(list(fps))
             )
+            # Restrict pool to same split when using actives as pool (no external pool_df)
+            cur_pool = (pool.filter(pl.col("split") == split)
+                        if self._pool_df is None else pool)
+            cur_pool_valid   = cur_pool.filter(pl.col("unique_id").is_in(list(fps)))
+            cur_pool_uids    = cur_pool_valid["unique_id"].to_list()
+            cur_pool_matrix  = np.vstack([fps[u] for u in cur_pool_uids])  # (P, D)
+            cur_pool_targets = np.array(cur_pool_valid["target_id"].to_list())
+
             act_uids    = actives["unique_id"].to_list()
             act_targets = actives["target_id"].to_list()
-            act_matrix  = np.vstack([fps[u] for u in act_uids])          # (A, D)
-            eligible_cache = {t: np.where(pool_targets != t)[0]
-                              for t in np.unique(act_targets)}            # K calls, not N
+            act_matrix  = np.vstack([fps[u] for u in act_uids])
+            eligible_cache = {t: np.where(cur_pool_targets != t)[0]
+                              for t in np.unique(act_targets)}
             print(f"  Building {split} queries ({len(act_uids)} actives, "
-                  f"{len(eligible_cache)} unique targets)...")
+                  f"{len(cur_pool_uids)} pool)...")
             Xs, ys, sizes, tids = [], [], [], []
             for i, (uid, tid) in enumerate(tqdm(
                     zip(act_uids, act_targets), total=len(act_uids),
@@ -180,7 +184,7 @@ class RankDataset:
                 idxs = self._neg_gen.sample(eligible_cache[tid], rng)
                 if len(idxs) == 0:
                     continue
-                Xs.append(np.vstack([act_matrix[i:i+1], pool_matrix[idxs]]))
+                Xs.append(np.vstack([act_matrix[i:i+1], cur_pool_matrix[idxs]]))
                 ys.append(np.array([1] + [0] * len(idxs), dtype=np.uint8))
                 sizes.append(1 + len(idxs))
                 tids.append(tid)
