@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import os
 import pickle
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +11,7 @@ from rdkit import Chem, RDLogger
 import sys
 
 from tqdm import tqdm
+from tqdm.contrib.concurrent import thread_map
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -50,10 +50,8 @@ def _featurise_df(df: pl.DataFrame, featuriser: LigandFeaturiser,
                 return pickle.load(f)
 
     print(f"  Featurising {len(tasks)} molecules ({n_workers} workers)...")
-    with ThreadPoolExecutor(max_workers=n_workers) as ex:
-        futures = [ex.submit(_read_and_featurise, t) for t in tasks]
-        results = [f.result() for f in tqdm(as_completed(futures), total=len(tasks),
-                                            desc="  featurise", unit="mol", file=sys.stdout)]
+    results = thread_map(_read_and_featurise, tasks, max_workers=n_workers,
+                         desc="  featurise", unit="mol", file=sys.stdout)
     fps = {uid: fp for uid, fp in results if fp is not None}
 
     if cache_dir is not None:
