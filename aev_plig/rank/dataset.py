@@ -32,7 +32,6 @@ def _read_and_compute_features(args: tuple) -> tuple[str, np.ndarray | None]:
     if not os.path.exists(mol_path):
         return uid, None
     mol = _read_molecule(mol_path)
-    print(mol)
     return uid, (featuriser.featurise(mol, protein_path) if mol is not None else None)
 
 
@@ -133,14 +132,12 @@ def load_records(
         target_ids = records_df["target"].to_list()
         compound_ids = records_df["compnd"].to_list()
 
-       
-
         source_frames.append(
             pl.DataFrame({
                 "unique_id": records_df["unique_identify"],
                 "target_id": target_ids,
                 "mol_path": [
-                    f"{bindingnet_root}/{p}/target_{t}/{c}/*.sdf"
+                    f"{bindingnet_root}/{p}/target_{t}/{c}/{p}_{t}_{c}.sdf"
                     for p, t, c in zip(pdb_codes, target_ids, compound_ids)
                 ],
                 "protein_path": [
@@ -208,90 +205,63 @@ class RankDataset:
 
     def prepare(self) -> None:
         random_generator = np.random.default_rng(self._seed)
-
         negative_pool_df = self._pool_df if self._pool_df is not None else self._actives_df
 
+        if self._pool_df is not None:
+            featurise_df = pl.concat([self._actives_df, negative_pool_df]).unique("unique_id")
+        else:
+            featurise_df = self._actives_df
+
         fingerprints_by_id = _compute_fingerprints_for_df(
-            pl.concat([self._actives_df, negative_pool_df]).unique("unique_id"),
-            self._featuriser,
-            self._n_jobs,
-            self._cache_dir,
+            featurise_df, self._featuriser, self._n_jobs, self._cache_dir,
         )
+        valid_ids = set(fingerprints_by_id)
 
-        for split in self._actives_df["split"].unique():
+        actives_valid = self._actives_df.filter(pl.col("unique_id").is_in(valid_ids))
+        pool_valid = negative_pool_df.filter(pl.col("unique_id").is_in(valid_ids))
 
-            active_records = self._actives_df.filter(
-                (pl.col("split") == split)
-                & pl.col("unique_id").is_in(list(fingerprints_by_id))
+        for split in actives_valid["split"].unique():
+            split_actives = actives_valid.filter(pl.col("split") == split)
+            split_pool = (
+                pool_valid.filter(pl.col("split") == split)
+                if self._pool_df is None else pool_valid
             )
 
-            current_pool_df = (
-                negative_pool_df.filter(pl.col("split") == split)
-                if self._pool_df is None else negative_pool_df
+            pool_ids = split_pool["unique_id"].to_list()
+            pool_target_ids = split_pool["target_id"].to_numpy()
+            pool_feature_matrix = np.vstack([fingerprints_by_id[rid] for rid in pool_ids])
+            pool_idx_all = np.arange(len(pool_ids))
+
+            active_ids = split_actives["unique_id"].to_list()
+            active_target_ids = split_actives["target_id"].to_numpy()
+            active_feature_matrix = np.vstack([fingerprints_by_id[rid] for rid in active_ids])
+
+            # One rng.choice per unique target; broadcast sampled indices to all its actives
+            n_neg = self._neg_gen.n
+            neg_index_matrix = np.empty((len(active_ids), n_neg), dtype=np.intp)
+            for t in np.unique(active_target_ids):
+                mask = active_target_ids == t
+                own = np.where(pool_target_ids == t)[0]
+                eligible = np.setdiff1d(pool_idx_all, own, assume_unique=True)
+                draws = random_generator.choice(eligible, size=(mask.sum(), n_neg), replace=False)
+                neg_index_matrix[mask] = draws
+
+            # (Q, 1+n_neg, F) → (Q*(1+n_neg), F)
+            n_queries = len(active_ids)
+            feature_matrix = np.concatenate(
+                [active_feature_matrix[:, np.newaxis, :], pool_feature_matrix[neg_index_matrix]],
+                axis=1,
+            ).reshape(n_queries * (1 + n_neg), -1)
+
+            labels = np.zeros(n_queries * (1 + n_neg), dtype=np.uint8)
+            labels[:: 1 + n_neg] = 1
+
+            self._data[split] = (
+                feature_matrix,
+                labels,
+                np.full(n_queries, 1 + n_neg, dtype=np.intp),
+                active_target_ids.tolist(),
             )
-
-            valid_pool_df = current_pool_df.filter(
-                pl.col("unique_id").is_in(list(fingerprints_by_id))
-            )
-
-            pool_record_ids = valid_pool_df["unique_id"].to_list()
-            pool_feature_matrix = np.vstack([
-                fingerprints_by_id[rid] for rid in pool_record_ids
-            ])
-            pool_target_ids = np.array(valid_pool_df["target_id"].to_list())
-
-            active_record_ids = active_records["unique_id"].to_list()
-            active_target_ids = active_records["target_id"].to_list()
-            active_feature_matrix = np.vstack([
-                fingerprints_by_id[rid] for rid in active_record_ids
-            ])
-
-            eligible_pool_indices_by_target = {
-                t: np.where(pool_target_ids != t)[0]
-                for t in np.unique(active_target_ids)
-            }
-
-            print(f"  Building {split} queries ({len(active_record_ids)} actives, {len(pool_record_ids)} pool)...")
-
-            feature_blocks, label_blocks, group_sizes, group_target_ids = [], [], [], []
-
-            for i, (record_id, target_id) in enumerate(tqdm(
-                zip(active_record_ids, active_target_ids),
-                total=len(active_record_ids),
-                desc=f"  {split}",
-                unit="query",
-                leave=False,
-                file=sys.stdout,
-            )):
-                negative_indices = self._neg_gen.sample(
-                    eligible_pool_indices_by_target[target_id],
-                    random_generator,
-                )
-
-                if len(negative_indices) == 0:
-                    continue
-
-                feature_blocks.append(
-                    np.vstack([
-                        active_feature_matrix[i:i+1],
-                        pool_feature_matrix[negative_indices],
-                    ])
-                )
-
-                label_blocks.append(
-                    np.array([1] + [0] * len(negative_indices), dtype=np.uint8)
-                )
-
-                group_sizes.append(1 + len(negative_indices))
-                group_target_ids.append(target_id)
-
-            if feature_blocks:
-                self._data[split] = (
-                    np.vstack(feature_blocks),
-                    np.concatenate(label_blocks),
-                    np.array(group_sizes),
-                    group_target_ids,
-                )
 
     def get_arrays(self, split: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         if split not in self._data:
