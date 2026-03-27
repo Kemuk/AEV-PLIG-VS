@@ -50,6 +50,18 @@ def main():
         cache_dir=args.cache_dir,
     )
 
+    print("\n=== Validation set enrichment ===")
+    try:
+        summary = overall_enrichment(model, dataset, split="valid")
+        for k, v in summary.items():
+            print(f"  {k}: {v:.4f}")
+        df = per_target_enrichment(model, dataset, split="valid")
+        out = Path(args.output_dir) / "validation_enrichment.csv"
+        df.write_csv(out)
+        print(f"\nPer-target results saved to {out}")
+    except KeyError:
+        print("  No validation split found — skipping evaluation.")
+
     print("\n=== Test enrichment ===")
     try:
         summary = overall_enrichment(model, dataset, split="test")
