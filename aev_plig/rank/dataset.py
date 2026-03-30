@@ -4,13 +4,12 @@ import hashlib
 import os
 import pickle
 from pathlib import Path
-import sys
+import gc
 
 import numpy as np
 import polars as pl
 from rdkit import Chem, RDLogger
 from tqdm import tqdm
-from tqdm.contrib.concurrent import thread_map
 
 from .featurisers import LigandFeaturiser
 from .negatives import NegativeGenerator
@@ -38,11 +37,12 @@ def _read_and_compute_features(args: tuple) -> tuple[str, np.ndarray | None]:
 def _compute_fingerprints_for_df(
     records_df: pl.DataFrame,
     featuriser: LigandFeaturiser,
-    n_jobs: int = -1,
+    n_jobs: int = 1,
     cache_dir: str | None = None,
+    chunk_size: int = 5000,
 ) -> dict[str, np.ndarray]:
-
-    n_workers = os.cpu_count() if n_jobs < 1 else n_jobs
+    _ = n_jobs  # Serial-only path: keep parameter for API compatibility.
+    chunk_size = max(1, int(chunk_size))
 
     featurisation_tasks = [
         (row["unique_id"], row["mol_path"], row["protein_path"], featuriser)
@@ -64,22 +64,24 @@ def _compute_fingerprints_for_df(
             with open(cache_path, "rb") as f:
                 return pickle.load(f)
 
-    print(f"  Featurising {len(featurisation_tasks)} molecules ({n_workers} workers)...")
-
-    featurisation_results = thread_map(
-        _read_and_compute_features,
-        featurisation_tasks,
-        total=len(featurisation_tasks),
-        max_workers=n_workers,
-        desc="  featurise",
-        unit="mol",
+    n_total = len(featurisation_tasks)
+    n_chunks = (n_total + chunk_size - 1) // chunk_size
+    print(
+        f"  Featurising {n_total} molecules serially "
+        f"({n_chunks} chunk(s) of {chunk_size})..."
     )
 
-    fingerprints_by_id = {
-        record_id: fp
-        for record_id, fp in featurisation_results
-        if fp is not None
-    }
+    fingerprints_by_id: dict[str, np.ndarray] = {}
+    with tqdm(total=n_total, desc="  featurise", unit="mol") as pbar:
+        for chunk_start in range(0, n_total, chunk_size):
+            chunk_tasks = featurisation_tasks[chunk_start: chunk_start + chunk_size]
+            for task in chunk_tasks:
+                record_id, fp = _read_and_compute_features(task)
+                if fp is not None:
+                    fingerprints_by_id[record_id] = fp
+                pbar.update(1)
+            del chunk_tasks
+            gc.collect()
 
     if cache_dir is not None:
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
@@ -191,8 +193,9 @@ class RankDataset:
         neg_gen: NegativeGenerator,
         seed: int = 42,
         pool_df: pl.DataFrame | None = None,
-        n_jobs: int = -1,
+        n_jobs: int = 1,
         cache_dir: str | None = None,
+        chunk_size: int = 5000,
     ):
         self._actives_df = actives_df
         self._featuriser = featuriser
@@ -201,6 +204,7 @@ class RankDataset:
         self._pool_df = pool_df
         self._n_jobs = n_jobs
         self._cache_dir = cache_dir
+        self._chunk_size = max(1, int(chunk_size))
         self._data: dict = {}
 
     def prepare(self) -> None:
@@ -213,12 +217,22 @@ class RankDataset:
             featurise_df = self._actives_df
 
         fingerprints_by_id = _compute_fingerprints_for_df(
-            featurise_df, self._featuriser, self._n_jobs, self._cache_dir,
+            featurise_df,
+            self._featuriser,
+            self._n_jobs,
+            self._cache_dir,
+            chunk_size=self._chunk_size,
         )
-        valid_ids = set(fingerprints_by_id)
+        if not fingerprints_by_id:
+            raise ValueError("No valid fingerprints could be computed from input records.")
 
+        valid_ids = set(fingerprints_by_id)
         actives_valid = self._actives_df.filter(pl.col("unique_id").is_in(valid_ids))
         pool_valid = negative_pool_df.filter(pl.col("unique_id").is_in(valid_ids))
+
+        sample_fp = next(iter(fingerprints_by_id.values()))
+        feature_dim = sample_fp.shape[0]
+        feature_dtype = sample_fp.dtype
 
         for split in actives_valid["split"].unique():
             split_actives = actives_valid.filter(pl.col("split") == split)
@@ -229,33 +243,66 @@ class RankDataset:
 
             pool_ids = split_pool["unique_id"].to_list()
             pool_target_ids = split_pool["target_id"].to_numpy()
-            pool_feature_matrix = np.vstack([fingerprints_by_id[rid] for rid in pool_ids])
             pool_idx_all = np.arange(len(pool_ids))
 
             active_ids = split_actives["unique_id"].to_list()
             active_target_ids = split_actives["target_id"].to_numpy()
-            active_feature_matrix = np.vstack([fingerprints_by_id[rid] for rid in active_ids])
 
-            # One rng.choice per unique target; broadcast sampled indices to all its actives
             n_neg = self._neg_gen.n
-            neg_index_matrix = np.empty((len(active_ids), n_neg), dtype=np.intp)
-            for t in np.unique(active_target_ids):
-                mask = active_target_ids == t
-                own = np.where(pool_target_ids == t)[0]
-                eligible = np.setdiff1d(pool_idx_all, own, assume_unique=True)
-                draws = random_generator.choice(eligible, size=(mask.sum(), n_neg), replace=False)
-                neg_index_matrix[mask] = draws
+            feature_chunks: list[np.ndarray] = []
+            label_chunks: list[np.ndarray] = []
 
-            # (Q, 1+n_neg, F) → (Q*(1+n_neg), F)
+            for start in range(0, len(active_ids), self._chunk_size):
+                end = min(start + self._chunk_size, len(active_ids))
+                chunk_active_ids = active_ids[start:end]
+                chunk_target_ids = active_target_ids[start:end]
+                n_chunk_queries = len(chunk_active_ids)
+
+                if n_chunk_queries == 0:
+                    continue
+
+                active_feature_matrix = np.vstack([fingerprints_by_id[rid] for rid in chunk_active_ids])
+
+                neg_index_matrix = np.empty((n_chunk_queries, n_neg), dtype=np.intp)
+                for t in np.unique(chunk_target_ids):
+                    mask = chunk_target_ids == t
+                    own = np.where(pool_target_ids == t)[0]
+                    eligible = np.setdiff1d(pool_idx_all, own, assume_unique=True)
+                    draws = random_generator.choice(
+                        eligible,
+                        size=(mask.sum(), n_neg),
+                        replace=False,
+                    )
+                    neg_index_matrix[mask] = draws
+
+                negative_feature_matrix = np.empty(
+                    (n_chunk_queries, n_neg, feature_dim),
+                    dtype=feature_dtype,
+                )
+                for i in range(n_chunk_queries):
+                    for j in range(n_neg):
+                        pool_id = pool_ids[neg_index_matrix[i, j]]
+                        negative_feature_matrix[i, j] = fingerprints_by_id[pool_id]
+
+                chunk_feature_matrix = np.concatenate(
+                    [active_feature_matrix[:, np.newaxis, :], negative_feature_matrix],
+                    axis=1,
+                ).reshape(n_chunk_queries * (1 + n_neg), -1)
+
+                chunk_labels = np.zeros(n_chunk_queries * (1 + n_neg), dtype=np.uint8)
+                chunk_labels[:: 1 + n_neg] = 1
+
+                feature_chunks.append(chunk_feature_matrix)
+                label_chunks.append(chunk_labels)
+
+            if feature_chunks:
+                feature_matrix = np.concatenate(feature_chunks, axis=0)
+                labels = np.concatenate(label_chunks, axis=0)
+            else:
+                feature_matrix = np.empty((0, feature_dim), dtype=feature_dtype)
+                labels = np.empty((0,), dtype=np.uint8)
+
             n_queries = len(active_ids)
-            feature_matrix = np.concatenate(
-                [active_feature_matrix[:, np.newaxis, :], pool_feature_matrix[neg_index_matrix]],
-                axis=1,
-            ).reshape(n_queries * (1 + n_neg), -1)
-
-            labels = np.zeros(n_queries * (1 + n_neg), dtype=np.uint8)
-            labels[:: 1 + n_neg] = 1
-
             self._data[split] = (
                 feature_matrix,
                 labels,

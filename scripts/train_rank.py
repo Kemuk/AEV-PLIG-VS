@@ -18,8 +18,10 @@ def parse_args():
     p.add_argument("--n-estimators", type=int,   default=RankConfig.N_ESTIMATORS)
     p.add_argument("--lr",           type=float, default=RankConfig.LEARNING_RATE)
     p.add_argument("--num-leaves",   type=int,   default=RankConfig.NUM_LEAVES)
-    p.add_argument("--n-jobs",       type=int,   default=-1,
-                   help="Parallel workers for featurisation (-1 = all CPUs)")
+    p.add_argument("--n-jobs",       type=int,   default=1,
+                   help="Parallel workers for featurisation (serial default: 1)")
+    p.add_argument("--chunk-size",   type=int,   default=5000,
+                   help="Number of records processed per serial chunk during prep")
     p.add_argument("--cache-dir",    default=None,
                    help="Directory to cache fingerprints (skip if absent)")
     p.add_argument("--output-dir",   default=RankConfig.RANK_MODELS_DIR)
@@ -30,15 +32,18 @@ def main():
     args = parse_args()
 
     cfg = RankConfig()
-    cfg.N_NEGATIVES   = args.n_negatives
+    cfg.N_NEGATIVES = args.n_negatives
     cfg.NEGATIVE_SEED = args.seed
-    cfg.N_ESTIMATORS  = args.n_estimators
+    cfg.N_ESTIMATORS = args.n_estimators
     cfg.LEARNING_RATE = args.lr
-    cfg.NUM_LEAVES    = args.num_leaves
+    cfg.NUM_LEAVES = args.num_leaves
 
     print(f"Sources:      {args.sources}")
     print(f"Pool sources: {args.pool_sources or '(same as sources)'}")
-    print(f"Negatives:    {cfg.N_NEGATIVES}  |  Seed: {cfg.NEGATIVE_SEED}  |  Jobs: {args.n_jobs}")
+    print(
+        f"Negatives:    {cfg.N_NEGATIVES}  |  Seed: {cfg.NEGATIVE_SEED}  |  "
+        f"Jobs: {args.n_jobs}  |  Chunk size: {args.chunk_size}"
+    )
 
     model, dataset = train_rank(
         sources=args.sources,
@@ -48,6 +53,7 @@ def main():
         output_dir=args.output_dir,
         n_jobs=args.n_jobs,
         cache_dir=args.cache_dir,
+        chunk_size=args.chunk_size,
     )
 
     print("\n=== Validation set enrichment ===")
@@ -61,19 +67,6 @@ def main():
         print(f"\nPer-target results saved to {out}")
     except KeyError:
         print("  No validation split found — skipping evaluation.")
-
-    print("\n=== Test enrichment ===")
-    try:
-        summary = overall_enrichment(model, dataset, split="test")
-        for k, v in summary.items():
-            print(f"  {k}: {v:.4f}")
-        df = per_target_enrichment(model, dataset, split="test")
-        out = Path(args.output_dir) / "test_enrichment.csv"
-        df.write_csv(out)
-        print(f"\nPer-target results saved to {out}")
-    except KeyError:
-        print("  No test split found — skipping evaluation.")
-
 
 if __name__ == "__main__":
     main()
