@@ -5,12 +5,12 @@ This module provides functions to parse PDB (protein) and SDF/MOL2 (ligand) file
 and compute Atomic Environment Vectors (AEVs) for protein-ligand complexes.
 """
 
+import numpy as np
 import pandas as pd
+import qcelemental as qcel
 import torch
 import torchani
 import torchani_mod
-import qcelemental as qcel
-import numpy as np
 from biopandas.pdb import PandasPdb
 
 
@@ -107,9 +107,11 @@ def load_protein_atoms_biopandas(pdb_path, atom_keys):
     ppdb = PandasPdb().read_pdb(pdb_path)
     protein = ppdb.df['ATOM']
 
-    # Filter out hydrogen atoms and atoms starting with numbers
-    protein = protein[~protein["atom_name"].str.startswith("H")]
-    protein = protein[~protein["atom_name"].str.startswith(tuple(map(str, range(10))))]
+    # Filter out hydrogen atoms and atoms starting with numbers (single combined filter)
+    protein = protein[
+        ~protein["atom_name"].str.startswith("H") &
+        ~protein["atom_name"].str.match(r"^\d")
+    ]
 
     # Check for unsupported residues
     discard = protein[~protein["residue_name"].isin(allowed_residues)]
@@ -177,11 +179,20 @@ def compute_aevs(protein_path, mol, atom_keys, radial_coefs, atom_map, use_biopa
     EtaA = torch.tensor([1.0])
     RsA = torch.tensor([1.0])
 
-    # Reduce size of Target df based on radial cutoff (optimization)
+    # Reduce size of Target df based on radial cutoff (single filter instead of 6)
     distance_cutoff = RcR + 0.1
-    for coord in ["X", "Y", "Z"]:
-        Target = Target[Target[coord] < float(Ligand[coord].max()) + distance_cutoff]
-        Target = Target[Target[coord] > float(Ligand[coord].min()) - distance_cutoff]
+    x_max, x_min = Ligand["X"].max(), Ligand["X"].min()
+    y_max, y_min = Ligand["Y"].max(), Ligand["Y"].min()
+    z_max, z_min = Ligand["Z"].max(), Ligand["Z"].min()
+
+    Target = Target[
+        (Target["X"] < x_max + distance_cutoff) &
+        (Target["X"] > x_min - distance_cutoff) &
+        (Target["Y"] < y_max + distance_cutoff) &
+        (Target["Y"] > y_min - distance_cutoff) &
+        (Target["Z"] < z_max + distance_cutoff) &
+        (Target["Z"] > z_min - distance_cutoff)
+    ]
 
     Target = Target.merge(atom_map, on='ATOM_TYPE', how='left')
 
@@ -201,7 +212,7 @@ def compute_aevs(protein_path, mol, atom_keys, radial_coefs, atom_map, use_biopa
 
     AEVC = torchani_mod.AEVComputer(RcR, RcA, EtaR, RsR, EtaA, Zeta, RsA, TsA, len(atom_symbols))
 
-    SC = torchani.SpeciesConverter(atom_symbols)
+    SC = torchani_mod.SpeciesConverter(atom_symbols)
     sc = SC((atomicnums, coordinates))
 
     # Call modified forward method with mol_len to separate ligand from protein

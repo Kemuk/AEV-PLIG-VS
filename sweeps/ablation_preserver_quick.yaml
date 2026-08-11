@@ -1,0 +1,38 @@
+# Quick-test version of ablation_preserver.yaml.
+# Used by slurm/tests/jobs/05_sweep_quick.sh (devel partition, 3 agents).
+# Differences from production: --epochs 2, no base_model_dir (random init),
+# no max_training_hours.
+
+program: scripts/sweep_agent.py
+
+method: bayes
+metric:
+  name: val_pearson_r
+  goal: maximize
+
+run_cap: 10
+
+parameters:
+  freeze_gnn:
+    value: true
+  lr_head:
+    distribution: log_uniform_values
+    min: 1.0e-05
+    max: 1.0e-02
+  seed:
+    distribution: int_uniform
+    min: 0
+    max: 9999
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - --dataset
+  - pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark
+  - --device
+  - auto
+  - --epochs
+  - "2"
+  - --archetype
+  - preserver

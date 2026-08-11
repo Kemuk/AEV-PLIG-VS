@@ -7,11 +7,12 @@ This module provides the model architecture and model registry for easy model se
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from abc import ABC, abstractmethod
 from torch_geometric.nn import GATv2Conv
 from torch_geometric.nn import global_max_pool as gmp
 from torch_geometric.nn import global_mean_pool as gap
 from torch_geometric.nn import BatchNorm
-from aev_plig.config import Config
+from aev_plig.config import Config, RetrievalConfig
 
 
 # Activation function registry
@@ -21,26 +22,31 @@ ACTIVATION_FUNCTIONS = {
 }
 
 
-class GATv2Net(torch.nn.Module):
+class BaseGATv2Net(torch.nn.Module, ABC):
     """
-    Graph Attention Network v2 for protein-ligand binding affinity prediction.
+    Abstract base class for GATv2-based graph neural network models.
 
     Architecture:
-    - 5 GATv2Conv layers with batch normalization
+    - N GATv2Conv layers with batch normalization
     - Global pooling (concatenation of max and mean pooling)
     - 3 fully connected layers with batch normalization
-    - Output: Single value (predicted binding affinity)
+    - Output head defined by subclasses
 
     Args:
         node_feature_dim: Dimension of node features
         edge_feature_dim: Dimension of edge features
-        config: Configuration object or namespace with model parameters
+        config: Configuration object or namespace with model parameters (optional, defaults to Config)
     """
 
-    def __init__(self, node_feature_dim, edge_feature_dim, config):
-        super(GATv2Net, self).__init__()
+    is_bayesian: bool = False
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
+        super().__init__()
 
         # Get configuration parameters
+        if config is None:
+            config = Config
+
         if hasattr(config, 'activation_function'):
             self.act = config.activation_function
         else:
@@ -56,7 +62,7 @@ class GATv2Net(torch.nn.Module):
         else:
             head = Config.NUM_ATTENTION_HEADS
 
-        self.number_GNN_layers = Config.NUM_GNN_LAYERS
+        self.number_GNN_layers = getattr(config, 'num_layers', Config.NUM_GNN_LAYERS)
         self.activation = ACTIVATION_FUNCTIONS[self.act]
 
         # GNN layers
@@ -84,7 +90,29 @@ class GATv2Net(torch.nn.Module):
         self.bn_connect2 = nn.BatchNorm1d(mlp_dims[1])
         self.fc3 = nn.Linear(mlp_dims[1], mlp_dims[2])
         self.bn_connect3 = nn.BatchNorm1d(mlp_dims[2])
-        self.out = nn.Linear(mlp_dims[2], 1)
+
+        dropout_rate = getattr(config, 'dropout', 0.0) if config is not None else 0.0
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def _gnn_forward(self, x, edge_index, edge_attr):
+        """Run input through GNN layers with batch normalization."""
+        for layer, bn in zip(self.GNN_layers, self.BN_layers):
+            x = layer(x, edge_index, edge_attr)
+            x = self.activation(x)
+            x = bn(x)
+        return x
+
+    def _mlp_forward(self, x):
+        """Run input through fully connected layers with batch normalization."""
+        x = self.dropout(self.bn_connect1(self.activation(self.fc1(x))))
+        x = self.dropout(self.bn_connect2(self.activation(self.fc2(x))))
+        x = self.dropout(self.bn_connect3(self.activation(self.fc3(x))))
+        return x
+
+    @abstractmethod
+    def _output_head(self, x):
+        """Apply the final output head. Subclasses define their output layer(s)."""
+        pass
 
     def forward(self, data):
         """
@@ -94,39 +122,177 @@ class GATv2Net(torch.nn.Module):
             data: PyTorch Geometric Data object with x, edge_index, edge_attr, batch
 
         Returns:
-            torch.Tensor: Predicted binding affinity (shape: [batch_size, 1])
+            Output from the subclass output head
         """
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
 
-        # GNN layers
-        for layer, bn in zip(self.GNN_layers, self.BN_layers):
-            x = layer(x, edge_index, edge_attr)
-            x = self.activation(x)
-            x = bn(x)
+        x = self._gnn_forward(x, edge_index, edge_attr)
 
         # Global pooling (concatenate max and mean pooling)
         x = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
 
-        # Fully connected layers
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.bn_connect1(x)
-        x = self.fc2(x)
-        x = self.activation(x)
-        x = self.bn_connect2(x)
-        x = self.fc3(x)
-        x = self.activation(x)
-        x = self.bn_connect3(x)
+        x = self._mlp_forward(x)
 
+        return self._output_head(x)
+
+    @abstractmethod
+    def predict(self, data):
+        """Return point predictions for inference."""
+        pass
+
+
+class GATv2Net(BaseGATv2Net):
+    """
+    Graph Attention Network v2 for protein-ligand binding affinity prediction.
+
+    Output: Single value (predicted binding affinity)
+    """
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
+        super().__init__(node_feature_dim, edge_feature_dim, config)
+        mlp_dims = Config.MLP_DIMS
+        self.out = nn.Linear(mlp_dims[2], 1)
+
+    def _output_head(self, x):
         return self.out(x)
+
+    def predict(self, data):
+        """Return point predictions for inference."""
+        return self.forward(data)
+
+
+class GATv2NetAleatoric(BaseGATv2Net):
+    """
+    Aleatoric uncertainty GATv2Net for protein-ligand binding affinity prediction.
+
+    Captures aleatoric (data) uncertainty only via a heteroscedastic NLL head.
+    Both output heads are deterministic point estimates — this model is NOT
+    Bayesian and does not estimate epistemic (model) uncertainty.
+
+    Output: (mean, variance) tuple
+    """
+
+    is_bayesian: bool = False
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
+        super().__init__(node_feature_dim, edge_feature_dim, config)
+        mlp_dims = Config.MLP_DIMS
+        self.mean_head = nn.Linear(mlp_dims[2], 1)
+        self.logvar_head = nn.Linear(mlp_dims[2], 1)
+
+    def _output_head(self, x):
+        mean = self.mean_head(x)
+        var = F.softplus(self.logvar_head(x)) + 1e-6
+        return mean, var
+
+    def predict(self, data):
+        """Return point predictions for inference (mean only)."""
+        mean, _ = self.forward(data)
+        return mean
+
+
+class GATv2NetMixedPrecision(GATv2Net):
+    """
+    Mixed precision GATv2Net.
+
+    GNN layers run in fp16 under the Trainer's autocast context.
+    MLP layers are forced to fp32 to avoid numerical instability in the
+    fully connected layers.
+    """
+
+    def _mlp_forward(self, x):
+        with torch.amp.autocast('cuda', enabled=False):
+            return super()._mlp_forward(x.float())
+
+
+class GATv2NetRetrieval(BaseGATv2Net):
+    """
+    GATv2Net with dual projection heads for contrastive retrieval.
+
+    Shared GNN backbone produces a 256-dim representation per complex,
+    then two linear heads project into separate protein-contribution and
+    ligand-contribution embedding spaces for in-batch contrastive learning.
+
+    forward() returns (protein_emb, ligand_emb) both [B, embed_dim].
+    predict() returns the dot-product score per complex (scalar).
+    """
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None):
+        super().__init__(node_feature_dim, edge_feature_dim, config)
+        mlp_dims = Config.MLP_DIMS
+        embed_dim = getattr(config, 'embed_dim', RetrievalConfig.EMBEDDING_DIM)
+        self.protein_head = nn.Linear(mlp_dims[2], embed_dim)
+        self.ligand_head = nn.Linear(mlp_dims[2], embed_dim)
+
+    def _output_head(self, x):
+        return self.protein_head(x), self.ligand_head(x)
+
+    def predict(self, data):
+        protein_emb, ligand_emb = self.forward(data)
+        return (protein_emb * ligand_emb).sum(dim=-1, keepdim=True)
+
+
+class GATv2NetBayesian(BaseGATv2Net):
+    """
+    True Bayesian GATv2Net via Variational Bayesian Last Layer (VBLL, ICLR 2024).
+
+    Same backbone as GATv2Net, but the final output head is replaced with
+    vbll.Regression — a variational posterior over last-layer weights.
+    Provides both epistemic uncertainty (reducible with more data) via the
+    weight posterior and aleatoric uncertainty via the Wishart noise covariance,
+    in a single sampling-free forward pass.
+
+    Forward returns a VBLLReturn dataclass:
+        out.predictive.mean      Posterior-predictive mean, shape (batch, 1)
+        out.predictive.variance  Total uncertainty (epistemic + aleatoric)
+        out.train_loss_fn(y)     ELBO loss — use during training
+        out.val_loss_fn(y)       Log-likelihood — use for monitoring/early stopping
+    """
+
+    is_bayesian: bool = True
+
+    def __init__(self, node_feature_dim, edge_feature_dim, config=None, dataset_size=None):
+        super().__init__(node_feature_dim, edge_feature_dim, config)
+        if dataset_size is None:
+            dataset_size = getattr(config, 'dataset_size', 1000) if config else 1000
+        import vbll
+        mlp_dims = Config.MLP_DIMS
+        self.vbll_head = vbll.Regression(
+            in_features=mlp_dims[2],
+            out_features=1,
+            regularization_weight=1.0 / dataset_size,
+        )
+
+    def _output_head(self, x):
+        return self.vbll_head(x)
+
+    def predict(self, data):
+        """Return posterior-predictive mean for inference."""
+        return self.forward(data).predictive.mean
+
+
+class GATv2NetBayesianMixedPrecision(GATv2NetBayesian):
+    """
+    Mixed precision VBLL Bayesian GATv2Net.
+
+    GNN layers run in fp16 under the Trainer's autocast context.
+    MLP layers are forced to fp32 to avoid numerical instability in the
+    fully connected layers.
+    """
+
+    def _mlp_forward(self, x):
+        with torch.amp.autocast('cuda', enabled=False):
+            return super()._mlp_forward(x.float())
 
 
 # Model registry for easy model selection
 MODEL_REGISTRY = {
-    'GATv2Net': GATv2Net,
-    # Future models can be added here
-    # 'GCNNet': GCNNet,
-    # 'MPNNNet': MPNNNet,
+    'GATv2Net':                       GATv2Net,
+    'GATv2NetRetrieval':              GATv2NetRetrieval,
+    'GATv2NetAleatoric':              GATv2NetAleatoric,
+    'GATv2NetBayesian':               GATv2NetBayesian,
+    'GATv2NetMixedPrecision':         GATv2NetMixedPrecision,
+    'GATv2NetBayesianMixedPrecision': GATv2NetBayesianMixedPrecision,
 }
 
 
@@ -136,13 +302,27 @@ def get_model(name, **kwargs):
 
     Args:
         name: Model name (e.g., 'GATv2Net')
-        **kwargs: Arguments to pass to model constructor
+        **kwargs: Arguments to pass to model constructor. Common arguments:
+            - node_feature_dim (int): Dimension of node features
+            - edge_feature_dim (int): Dimension of edge features
+            - config (optional): Configuration object or namespace with model parameters.
+                               If not provided, uses defaults from Config class.
 
     Returns:
         torch.nn.Module: Instantiated model
 
     Raises:
         KeyError: If model name is not in registry
+
+    Example:
+        >>> # Create model with default config
+        >>> model = get_model('GATv2Net', node_feature_dim=25, edge_feature_dim=4)
+        >>>
+        >>> # Create model with custom config
+        >>> class CustomConfig:
+        ...     hidden_dim = 128
+        ...     head = 4
+        >>> model = get_model('GATv2Net', node_feature_dim=25, edge_feature_dim=4, config=CustomConfig())
     """
     if name not in MODEL_REGISTRY:
         raise KeyError(f"Model '{name}' not found in registry. Available models: {list(MODEL_REGISTRY.keys())}")

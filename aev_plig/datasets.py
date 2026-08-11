@@ -1,17 +1,21 @@
 """
-PyTorch Geometric dataset classes for protein-ligand graphs.
-
-This module provides dataset classes for loading and processing molecular graphs
-for use with PyTorch Geometric.
+PyTorch Geometric dataset utilities for protein-ligand graphs.
 """
 
-import os
+import json
 import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning)
+from pathlib import Path
+
 import numpy as np
-from torch_geometric.data import InMemoryDataset, Data
 import torch
 from sklearn.preprocessing import StandardScaler
+from torch.utils.data import ConcatDataset
+from torch_geometric.data import Data
+from tqdm import tqdm
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def init_weights(layer):
@@ -30,172 +34,94 @@ def init_weights(layer):
             torch.nn.init.zeros_(layer.bias)
 
 
-class GraphDataset(InMemoryDataset):
+def create_dataset(ids, targets, graphs_dict, scale=False, y_scaler=None,
+                   sdf_files=None, pdb_files=None):
     """
-    PyTorch Geometric dataset for training/validation/test sets with labels.
-
-    Loads molecular graphs from a dictionary and creates PyTorch Data objects.
-    Automatically applies StandardScaler normalization to target values (pK).
+    Convert graph tuples into a list of PyG Data objects.
 
     Args:
-        root: Root directory for data storage (default: 'data')
-        dataset: Dataset name (used for file naming)
-        ids: List of molecule IDs
-        y: List of target values (binding affinities)
-        graphs_dict: Dictionary mapping IDs to graph tuples
-        y_scaler: Optional StandardScaler (if None, creates new one from training data)
+        ids: List of graph IDs used to look up graph tuples.
+        targets: List of labels or graph_ids to store in `Data.y`.
+        graphs_dict: Mapping of unique_id -> (c_size, features, edge_index, edge_features).
+        scale: If True, apply StandardScaler to targets.
+        y_scaler: Optional pre-fit scaler for reuse across splits.
+        sdf_files: Optional list of ligand file paths (stored as Data.sdf_file).
+        pdb_files: Optional list of protein file paths (stored as Data.pdb_file).
+
+    Returns:
+        tuple[list[Data], StandardScaler | None]: data list and scaler.
     """
+    if len(ids) != len(targets):
+        raise ValueError("Number of datapoints and targets must be the same")
 
-    def __init__(self, root='data', dataset=None,
-                 ids=None, y=None, graphs_dict=None, y_scaler=None):
+    y_values = np.asarray(targets).reshape(-1, 1)
+    scaler = y_scaler
 
-        super(GraphDataset, self).__init__(root)
-        self.dataset = dataset
-        torch.serialization.add_safe_globals([Data])
+    if scale:
+        if scaler is None:
+            scaler = StandardScaler()
+            scaler.fit(y_values)
+        transformed = scaler.transform(y_values).flatten()
+        y_out = transformed.tolist()
+    else:
+        y_out = targets
 
-        if os.path.isfile(self.processed_paths[0]):
-            # Load existing processed data
-            self.load(self.processed_paths[0])
-            print("processed paths:")
-            print(self.processed_paths[0])
-        else:
-            # Process raw data and save
-            self.process(ids, y, graphs_dict)
-            self.load(self.processed_paths[0])
+    data_list = []
+    missing_count = 0
 
-        # Apply StandardScaler normalization to target values
-        if y_scaler is None:
-            y_scaler = StandardScaler()
-            y_scaler.fit(np.reshape(self._data.y, (self.__len__(), 1)))
-        self.y_scaler = y_scaler
-        self._data.y = [
-            torch.tensor(element[0]).float()
-            for element in self.y_scaler.transform(np.reshape(self._data.y, (self.__len__(), 1)))
+    for idx, unique_id in enumerate(tqdm(ids, desc="Creating graphs", unit="graphs")):
+        graph_tuple = graphs_dict.get(unique_id)
+        if graph_tuple is None:
+            missing_count += 1
+            continue
+
+        _, features, edge_index, edge_features = graph_tuple
+        value = y_out[idx]
+        y_dtype = torch.float32 if scale else torch.int32
+
+        data_point = Data(
+            x=torch.tensor(np.array(features), dtype=torch.float32),
+            edge_index=torch.tensor(np.array(edge_index), dtype=torch.long).T,
+            edge_attr=torch.tensor(np.array(edge_features), dtype=torch.float32),
+            y=torch.tensor([value], dtype=y_dtype),
+        )
+        data_point.unique_id = unique_id
+        data_point.pK = float(targets[idx])
+        if sdf_files is not None:
+            data_point.sdf_file = sdf_files[idx]
+        if pdb_files is not None:
+            data_point.pdb_file = pdb_files[idx]
+        data_list.append(data_point)
+
+    if missing_count > 0:
+        print(f"⚠️  {missing_count}/{len(ids)} graphs not found in graphs_dict")
+    print(f"✓ Processed {len(data_list)}/{len(ids)} graphs")
+
+    return data_list, scaler
+
+
+def load_split(dataset_name, split):
+    """Load split data from chunked manifest format, with flat-file fallback."""
+    dataset_root = _PROJECT_ROOT / "data" / "processed" / dataset_name
+    split_dir = dataset_root / split
+    manifest_path = split_dir / "manifest.json"
+
+    if manifest_path.exists():
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        parts = [
+            torch.load(split_dir / part_name, weights_only=False)
+            for part_name in manifest["parts"]
         ]
+        return parts[0] if len(parts) == 1 else ConcatDataset(parts)
 
-    @property
-    def raw_file_names(self):
-        pass
+    legacy_path = _PROJECT_ROOT / "data" / "processed" / f"{dataset_name}_{split}.pt"
+    if legacy_path.exists():
+        return torch.load(legacy_path, weights_only=False)
 
-    @property
-    def processed_file_names(self):
-        return [self.dataset + '.pt']
-
-    def download(self):
-        pass
-
-    def _download(self):
-        pass
-
-    def _process(self):
-        if not os.path.exists(self.processed_dir):
-            os.makedirs(self.processed_dir)
-
-    def process(self, ids, y, graphs_dict):
-        """
-        Process molecular graphs and create PyTorch Data objects.
-
-        Args:
-            ids: List of molecule IDs
-            y: List of target values
-            graphs_dict: Dictionary mapping IDs to (c_size, features, edge_index, edge_features)
-        """
-        assert (len(ids) == len(y)), 'Number of datapoints and labels must be the same'
-        data_list = []
-        data_len = len(ids)
-
-        for i in range(data_len):
-            pdbcode = ids[i]
-            label = y[i]
-            c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
-
-            data_point = Data(
-                x=torch.Tensor(np.array(features)),
-                edge_index=torch.LongTensor(np.array(edge_index)).T,
-                edge_attr=torch.Tensor(np.array(edge_features)),
-                y=torch.FloatTensor(np.array([label]))
-            )
-
-            data_list.append(data_point)
-
-        print('Graph construction done. Saving to file.')
-        self.save(data_list, self.processed_paths[0])
+    raise FileNotFoundError(
+        f"No dataset artifacts found for split '{split}'. "
+        f"Checked {manifest_path} and {legacy_path}."
+    )
 
 
-class GraphDatasetPredict(InMemoryDataset):
-    """
-    PyTorch Geometric dataset for prediction (no labels, uses graph IDs).
-
-    Used for inference on new data without known binding affinities.
-    Stores graph ID in the y field for tracking predictions.
-
-    Args:
-        root: Root directory for data storage (default: 'data')
-        dataset: Dataset name (used for file naming)
-        ids: List of molecule IDs
-        graph_ids: List of graph IDs (for tracking predictions)
-        graphs_dict: Dictionary mapping IDs to graph tuples
-    """
-
-    def __init__(self, root='data', dataset=None,
-                 ids=None, graph_ids=None, graphs_dict=None):
-
-        super(GraphDatasetPredict, self).__init__(root)
-        self.dataset = dataset
-        torch.serialization.add_safe_globals([Data])
-
-        if os.path.isfile(self.processed_paths[0]):
-            self.load(self.processed_paths[0])
-            print("processed paths:")
-            print(self.processed_paths[0])
-        else:
-            self.process(ids, graph_ids, graphs_dict)
-            self.load(self.processed_paths[0])
-
-    @property
-    def raw_file_names(self):
-        pass
-
-    @property
-    def processed_file_names(self):
-        return [self.dataset + '.pt']
-
-    def download(self):
-        pass
-
-    def _download(self):
-        pass
-
-    def _process(self):
-        if not os.path.exists(self.processed_dir):
-            os.makedirs(self.processed_dir)
-
-    def process(self, ids, graph_ids, graphs_dict):
-        """
-        Process molecular graphs for prediction.
-
-        Args:
-            ids: List of molecule IDs
-            graph_ids: List of graph IDs (stored in y field)
-            graphs_dict: Dictionary mapping IDs to (c_size, features, edge_index, edge_features)
-        """
-        assert (len(ids) == len(graph_ids)), 'Number of datapoints and graph IDs must be the same'
-        data_list = []
-        data_len = len(ids)
-
-        for i in range(data_len):
-            pdbcode = ids[i]
-            graph_id = graph_ids[i]
-            c_size, features, edge_index, edge_features = graphs_dict[pdbcode]
-
-            data_point = Data(
-                x=torch.Tensor(np.array(features)),
-                edge_index=torch.LongTensor(np.array(edge_index)).T,
-                edge_attr=torch.Tensor(np.array(edge_features)),
-                y=torch.IntTensor(np.array([graph_id]))
-            )
-
-            data_list.append(data_point)
-
-        print('Graph construction done. Saving to file.')
-        self.save(data_list, self.processed_paths[0])

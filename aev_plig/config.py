@@ -65,7 +65,10 @@ class Config:
     # Bond types for edge features (RDKit bond type codes)
     BOND_TYPES = [1, 12, 2, 3]  # SINGLE=1, AROMATIC=12, DOUBLE=2, TRIPLE=3
 
-    # ==================== Model Architecture (GATv2Net) ====================
+    # ==================== Model ====================
+    MODEL_NAME = "GATv2Net"
+
+    # Architecture
     HIDDEN_DIM = 256
     NUM_GNN_LAYERS = 5
     NUM_ATTENTION_HEADS = 3
@@ -95,6 +98,22 @@ class Config:
 
     # Loss function
     LOSS_FUNCTION = 'mse'  # Mean squared error
+
+    @staticmethod
+    def validate_ensemble_seeds():
+        """
+        Validate that ENSEMBLE_SEEDS contains no duplicates.
+
+        Raises:
+            ValueError: If duplicate seeds are found
+        """
+        seeds = Config.ENSEMBLE_SEEDS
+        if len(seeds) != len(set(seeds)):
+            duplicates = [s for s in seeds if seeds.count(s) > 1]
+            raise ValueError(
+                f"Duplicate seeds found in Config.ENSEMBLE_SEEDS: {set(duplicates)}\n"
+                f"Each seed must be unique to avoid overwriting models!"
+            )
 
     # ==================== Data Split ====================
     TRAIN_RATIO = 0.8
@@ -159,3 +178,21 @@ class Config:
             'EtaA': torch.tensor([Config.AEV_ANGULAR_ETA]),
             'RsA': torch.tensor([Config.AEV_ANGULAR_RS])
         }
+
+
+class RetrievalConfig:
+    """Configuration for retrieval / virtual screening mode."""
+
+    # ==================== Training ====================
+    TEMPERATURE = 0.07
+    EMBEDDING_DIM = 128
+    LEARNING_RATE = 1e-4
+    WEIGHT_DECAY = 1e-5
+    BATCH_SIZE = 64
+    NUM_EPOCHS = 100
+    EARLY_STOPPING_PATIENCE = 10
+
+    # ==================== Evaluation ====================
+    EF_FRACTIONS = (0.01, 0.05, 0.1)
+    BEDROC_ALPHA = 20.0
+    TOP_K_FALSE_POSITIVES = 20

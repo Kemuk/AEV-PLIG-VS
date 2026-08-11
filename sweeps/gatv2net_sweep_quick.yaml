@@ -1,0 +1,43 @@
+# Quick-test version of gatv2net_sweep.yaml.
+# Used by slurm/tests/jobs/05_sweep_quick.sh (devel partition, 3 agents).
+# Only difference from production: --epochs 2 in the command section.
+
+program: scripts/sweep_agent.py
+
+method: bayes
+metric:
+  name: val_pearson_r
+  goal: maximize
+
+parameters:
+  lr:
+    distribution: log_uniform_values
+    min: 0.000005
+    max: 0.001
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.01
+  hidden_dim:
+    values: [128, 256, 512]
+  head:
+    values: [2, 3, 4, 6]
+  num_layers:
+    values: [3, 4, 5, 6]
+  activation_function:
+    values: [relu, leaky_relu]
+  seed:
+    distribution: int_uniform
+    min: 0
+    max: 9999
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - --dataset
+  - pdbbind_U_bindingnet_U_bindingdb_ligsim90_fep_benchmark
+  - --device
+  - auto
+  - --epochs
+  - "2"
