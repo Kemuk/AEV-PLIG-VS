@@ -57,6 +57,7 @@ Documentation = "https://github.com/Jnelen/AEV-PLIG"
 aev-plig-train           = "scripts.train:main"
 aev-plig-predict         = "scripts.predict:main"
 aev-plig-generate-graphs = "scripts.generate_pdbbind_graphs:main"
+aev-plig-rank-train      = "scripts.train_rank:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aev_plig", "torchani_mod", "scripts"]
