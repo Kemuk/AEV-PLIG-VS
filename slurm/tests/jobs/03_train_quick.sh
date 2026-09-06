@@ -55,7 +55,6 @@ PARTITION="${PARTITION_DEVEL}"
 TIME_LIMIT="00:10:00"  # 10 min max for devel
 MEM="${MEM_STANDARD}"
 CPUS="${CPUS_STANDARD}"
-export WANDB_CPU_COUNT=${CPUS}
 GPUS=1
 
 # Quick test: only 3 seeds

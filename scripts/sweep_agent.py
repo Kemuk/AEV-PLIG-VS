@@ -12,9 +12,10 @@ Usage (local smoke-test, no W&B):
         --weight_decay 0.0 --activation_function leaky_relu --seed 42 --epochs 5
 """
 import argparse
-import os
 import time
 import warnings
+
+import torch
 
 warnings.filterwarnings("ignore", message="cuaev not installed")
 warnings.filterwarnings("ignore", message="Dependency not satisfied, torchani.ase")
@@ -60,7 +61,11 @@ def main():
     args = parse_args()
     device = Config.get_device(args.device)
     if args.num_workers <= 0:
-        args.num_workers = os.cpu_count()
+        args.num_workers = Config.get_cpu_count()
+
+    # Pin PyTorch internal thread pools to match SLURM allocation
+    torch.set_num_threads(args.num_workers)
+    torch.set_num_interop_threads(1)
 
     if args.no_wandb:
         hp = args

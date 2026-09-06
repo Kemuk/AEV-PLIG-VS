@@ -56,7 +56,6 @@ PARTITION="${PARTITION_SHORT}"
 TIME_LIMIT="02:00:00"
 MEM="${MEM_STANDARD}"
 CPUS="${CPUS_STANDARD}"
-export WANDB_CPU_COUNT=${CPUS}
 GPUS="1"
 
 # Ensemble seeds from config.py

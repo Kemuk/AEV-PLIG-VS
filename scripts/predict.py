@@ -1,8 +1,9 @@
 """Predict binding affinities using a pre-trained GNN ensemble."""
 import argparse
-import os
 import time
 import warnings
+
+import torch
 
 from aev_plig.config import Config
 from aev_plig.prediction import load_data, run_predictions, save_results
@@ -40,7 +41,11 @@ def main():
     args = parse_args()
     args.device = Config.get_device(args.device)
     if args.num_workers <= 0:
-        args.num_workers = os.cpu_count()
+        args.num_workers = Config.get_cpu_count()
+
+    # Pin PyTorch internal thread pools to match SLURM allocation
+    torch.set_num_threads(args.num_workers)
+    torch.set_num_interop_threads(1)
 
     test_data, df, graph_time = load_data(args)
     df = run_predictions(test_data, df, args)
